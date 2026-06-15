@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comet Fleet HQ</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="logo">Ghost HQ</div>
+            <ul class="nav-links">
+                <li class="active" onclick="switchTab('sessions')">Sessions</li>
+                <li onclick="switchTab('targets')">Targets</li>
+                <li onclick="switchTab('analytics')">Analytics</li>
+                <li onclick="switchTab('pc-control')">PC Control</li>
+            </ul>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-bar">
+                <div class="session-controls">
+                    <button id="start-all-btn" class="btn btn-primary" onclick="startAll()">START ALL</button>
+                    <button id="stop-all-btn" class="btn btn-danger" onclick="stopAll()">STOP ALL</button>
+                </div>
+                <div class="platform-toggles">
+                    <button class="toggle-btn off" id="plat-twitch" onclick="togglePlatform('twitch')">Twitch <span>OFF</span></button>
+                    <button class="toggle-btn off" id="plat-youtube" onclick="togglePlatform('youtube')">YouTube <span>OFF</span></button>
+                    <button class="toggle-btn off" id="plat-spotify" onclick="togglePlatform('spotify')">Spotify <span>OFF</span></button>
+                    <button class="toggle-btn off" id="plat-deezer" onclick="togglePlatform('deezer')">Deezer <span>OFF</span></button>
+                </div>
+            </header>
+
+            <section id="resources-panel" class="resources-panel">
+                <div class="resource-card">
+                    <h3>Safe Profile Limit</h3>
+                    <div class="big-number" id="safe-limit">0</div>
+                    <div class="sub-text">CPU/RAM Calculated</div>
+                </div>
+                
+                <div class="resource-card">
+                    <h3>Fleet State</h3>
+                    <div class="stat-row"><span>Total Profiles:</span> <span id="total-prof">10</span></div>
+                    <div class="stat-row"><span>In Use:</span> <span id="in-use-prof">0</span></div>
+                    <div class="stat-row"><span>Available:</span> <span id="avail-prof">10</span></div>
+                </div>
+
+                <div class="resource-card hardware-monitors">
+                    <div class="monitor">
+                        <label>CPU Load</label>
+                        <div class="progress-bar"><div class="fill" id="cpu-fill" style="width: 0%;"></div></div>
+                        <span class="value" id="cpu-val">0%</span>
+                    </div>
+                    <div class="monitor">
+                        <label>RAM Usage</label>
+                        <div class="progress-bar"><div class="fill" id="ram-fill" style="width: 0%;"></div></div>
+                        <span class="value" id="ram-val">0GB</span>
+                    </div>
+                    <div class="monitor">
+                        <label id="gpu-label">GPU Load</label>
+                        <div class="progress-bar"><div class="fill" id="gpu-fill" style="width: 0%;"></div></div>
+                        <span class="value" id="gpu-val">0%</span>
+                    </div>
+                </div>
+
+                <div class="resource-card">
+                    <h3 id="network-type">Detecting Connection...</h3>
+                    <div class="round-meters-container">
+                        <div class="round-meter">
+                            <div class="circle-wrap" id="dl-circle">
+                                <div class="circle-inner">
+                                    <div class="circle-val" id="dl-val">0<br><span style="font-size:8px; color:#8892b0;">KB/s</span></div>
+                                </div>
+                            </div>
+                            <span class="meter-label">DOWNLOAD</span>
+                        </div>
+                        
+                        <div class="round-meter">
+                            <div class="circle-wrap" id="ul-circle">
+                                <div class="circle-inner">
+                                    <div class="circle-val" id="ul-val">0<br><span style="font-size:8px; color:#8892b0;">KB/s</span></div>
+                                </div>
+                            </div>
+                            <span class="meter-label">UPLOAD</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="sessions-section" class="data-section">
+                <div class="table-actions" style="flex-wrap: wrap; gap: 15px;">
+                    <button id="btn-check" class="btn">CHECK UNIQUE</button>
+                    <button id="btn-diagnose" class="btn">DIAGNOSE</button>
+                    <div class="profile-create-control">
+                        <label for="profile-create-count">Amount</label>
+                        <input id="profile-create-count" type="number" min="1" max="500" value="1">
+                    </div>
+                    <button id="btn-create" class="btn" onclick="createProfile()">CREATE PROFILE</button>
+                    <button id="btn-open" class="btn" onclick="openSelected()">OPEN SELECTED</button>
+                    <button id="btn-delete" class="btn" onclick="deleteSelected()">DELETE SELECTED</button>
+                    <button id="btn-history" class="btn" onclick="deleteHistory()">DELETE HISTORY</button>
+                </div>
+
+                <table class="ghost-table">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="profile-select-visible" title="Select visible profiles on this page" onchange="toggleVisibleProfileCheckboxes(this.checked)"></th>
+                            <th>Profile ID</th>
+                            <th>Status</th>
+                            <th>Current Target</th>
+                            <th>Browser Identity</th>
+                            <th>Live IP / Country</th>
+                        </tr>
+                    </thead>
+                    <tbody id="profile-table-body">
+                        <tr>
+                            <td><input type="checkbox"></td>
+                            <td>Profile 1</td>
+                            <td><span class="badge offline">Offline</span></td>
+                            <td>None</td>
+                            <td>Pending Execution</td>
+                            <td>Not verified</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+
+            <section id="targets-section" class="data-section" style="display: none;">
+                <div class="targets-header-row">
+                    <div>
+                        <h2 class="section-title">Platform Focus Lists</h2>
+                        <div class="section-subtitle">Add channels, videos, songs, artists, playlists, or search terms the bot should focus on during session runs.</div>
+                    </div>
+                    <button class="btn" onclick="refreshPlatformTargets()">REFRESH TARGETS</button>
+                </div>
+
+                <div class="target-editor-panel">
+                    <input type="hidden" id="target-edit-id" value="">
+
+                    <div class="target-form-grid">
+                        <label>
+                            Platform
+                            <select id="target-platform" class="ghost-input" onchange="updateTargetTypeOptions()">
+                                <option value="youtube">YouTube</option>
+                                <option value="twitch">Twitch</option>
+                                <option value="spotify">Spotify</option>
+                                <option value="deezer">Deezer</option>
+                            </select>
+                        </label>
+
+                        <label>
+                            Type
+                            <select id="target-type" class="ghost-input"></select>
+                        </label>
+
+                        <label>
+                            Name / Title
+                            <input id="target-title" class="ghost-input" placeholder="Example: Channel name, song title, artist name">
+                        </label>
+
+                        <label>
+                            URL / Link
+                            <input id="target-url" class="ghost-input" placeholder="Optional: full platform URL">
+                        </label>
+
+                        <label>
+                            Identifier / Handle
+                            <input id="target-identifier" class="ghost-input" placeholder="Optional: @handle, channel ID, track ID, playlist ID">
+                        </label>
+
+                        <label>
+                            Priority
+                            <select id="target-priority" class="ghost-input">
+                                <option value="10">10 - Highest</option>
+                                <option value="9">9</option>
+                                <option value="8">8</option>
+                                <option value="7">7</option>
+                                <option value="6">6</option>
+                                <option value="5" selected>5 - Normal</option>
+                                <option value="4">4</option>
+                                <option value="3">3</option>
+                                <option value="2">2</option>
+                                <option value="1">1 - Lowest</option>
+                            </select>
+                        </label>
+
+                        <label class="target-notes-field">
+                            Notes
+                            <input id="target-notes" class="ghost-input" placeholder="Optional notes for later logic">
+                        </label>
+
+                        <label class="target-enabled-toggle">
+                            <input type="checkbox" id="target-enabled" checked>
+                            Enabled
+                        </label>
+                    </div>
+
+                    <div class="target-form-actions">
+                        <button class="btn btn-primary" id="target-save-btn" onclick="savePlatformTarget()">ADD TARGET</button>
+                        <button class="btn btn-secondary" onclick="validatePlatformTargets()">VALIDATE TARGETS</button>
+                        <button class="btn" onclick="clearTargetForm()">CLEAR FORM</button>
+                    </div>
+                    <div id="target-action-status" class="target-action-status">Targets are stored locally now. Session routing logic will be connected later.</div>
+                    <div id="target-validation-summary" class="target-validation-summary"></div>
+                </div>
+
+                <div class="target-filter-row">
+                    <label>
+                        Filter Platform
+                        <select id="target-filter-platform" class="ghost-input" onchange="refreshPlatformTargets()">
+                            <option value="">All Platforms</option>
+                            <option value="youtube">YouTube</option>
+                            <option value="twitch">Twitch</option>
+                            <option value="spotify">Spotify</option>
+                            <option value="deezer">Deezer</option>
+                        </select>
+                    </label>
+                    <label>
+                        Filter Type
+                        <select id="target-filter-type" class="ghost-input" onchange="refreshPlatformTargets()">
+                            <option value="">All Types</option>
+                            <option value="channel">Channel</option>
+                            <option value="video">Video</option>
+                            <option value="playlist">Playlist</option>
+                            <option value="artist">Artist</option>
+                            <option value="song">Song</option>
+                            <option value="track">Track</option>
+                            <option value="album">Album</option>
+                            <option value="category">Category</option>
+                            <option value="search">Search</option>
+                            <option value="keyword">Keyword</option>
+                            <option value="url">URL</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </label>
+                    <label>
+                        Status
+                        <select id="target-filter-enabled" class="ghost-input" onchange="refreshPlatformTargets()">
+                            <option value="">All</option>
+                            <option value="1">Enabled Only</option>
+                            <option value="0">Disabled Only</option>
+                        </select>
+                    </label>
+                </div>
+
+                <table class="ghost-table target-table">
+                    <thead>
+                        <tr>
+                            <th>Platform</th>
+                            <th>Type</th>
+                            <th>Name / Title</th>
+                            <th>URL / Identifier</th>
+                            <th>Priority</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th>Updated</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="target-table-body">
+                        <tr><td colspan="9">No targets loaded yet.</td></tr>
+                    </tbody>
+                </table>
+            </section>
+
+
+            <section id="analytics-section" class="data-section" style="display: none;">
+                <div class="analytics-card-grid analytics-card-grid-wide">
+                    <div class="analytics-card">
+                        <h3>Active Profiles</h3>
+                        <div class="analytics-number" id="analytics-active-profiles">0</div>
+                    </div>
+                    <div class="analytics-card">
+                        <h3>Ad / Monetized Events</h3>
+                        <div class="analytics-number" id="analytics-ad-events">0</div>
+                    </div>
+                    <div class="analytics-card">
+                        <h3>Estimated Min</h3>
+                        <div class="analytics-number" id="analytics-estimated-min">$0.000000</div>
+                    </div>
+                    <div class="analytics-card">
+                        <h3>Estimated Avg</h3>
+                        <div class="analytics-number" id="analytics-estimated-value">$0.000000</div>
+                    </div>
+                    <div class="analytics-card">
+                        <h3>Estimated Max</h3>
+                        <div class="analytics-number" id="analytics-estimated-max">$0.000000</div>
+                    </div>
+                    <div class="analytics-card">
+                        <h3>Bad / Home / Duplicate IPs</h3>
+                        <div class="analytics-number" id="analytics-bad-ips">0</div>
+                    </div>
+                </div>
+
+                <div class="table-actions" style="flex-wrap: wrap; gap: 15px; margin-top: 20px;">
+                    <button class="btn" onclick="refreshAnalytics()">REFRESH ANALYTICS</button>
+                </div>
+
+                <div class="blacklist-panel">
+                    <h3>Manual IP Blacklist</h3>
+                    <div class="blacklist-controls">
+                        <input id="blacklist-ip-input" class="ghost-input" placeholder="IP address, example: 155.117.189.29">
+                        <input id="blacklist-reason-input" class="ghost-input" placeholder="Reason, example: no ads / no view credit">
+                        <button class="btn btn-danger" onclick="addBlacklistedIp()">BLACKLIST IP</button>
+                    </div>
+                    <div id="blacklist-action-status" class="blacklist-status">Blacklisted IPs will immediately close any profile that receives that IP later.</div>
+                </div>
+
+                <h3 class="analytics-heading">Platform Revenue Model</h3>
+                <div class="analytics-note">
+                    These are projection constants only. Real earnings must be reconciled against each platform's official reports.
+                </div>
+                <table class="ghost-table analytics-table">
+                    <thead>
+                        <tr>
+                            <th>Platform</th>
+                            <th>Metric</th>
+                            <th>Min</th>
+                            <th>Avg</th>
+                            <th>Max</th>
+                            <th>Condition</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analytics-model-body">
+                        <tr><td colspan="6">No revenue model loaded yet.</td></tr>
+                    </tbody>
+                </table>
+
+                <h3 class="analytics-heading">Profile Performance</h3>
+                <table class="ghost-table analytics-table">
+                    <thead>
+                        <tr>
+                            <th>Profile</th>
+                            <th>Status</th>
+                            <th>Platform</th>
+                            <th>Last IP</th>
+                            <th>Events</th>
+                            <th>Ads</th>
+                            <th>Units</th>
+                            <th>Est. Min</th>
+                            <th>Est. Avg</th>
+                            <th>Est. Max</th>
+                            <th>Last Event</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analytics-profile-body">
+                        <tr><td colspan="11">No analytics loaded yet.</td></tr>
+                    </tbody>
+                </table>
+
+                <h3 class="analytics-heading">IP Reputation</h3>
+                <table class="ghost-table analytics-table">
+                    <thead>
+                        <tr>
+                            <th>IP</th>
+                            <th>Location / Provider</th>
+                            <th>Status</th>
+                            <th>Blacklisted</th>
+                            <th>Reason</th>
+                            <th>Ads</th>
+                            <th>Failures</th>
+                            <th>Est. Avg</th>
+                            <th>Good For</th>
+                            <th>Bad For</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analytics-ip-body">
+                        <tr><td colspan="11">No IP reputation data yet.</td></tr>
+                    </tbody>
+                </table>
+
+                <h3 class="analytics-heading">Platform Performance</h3>
+                <table class="ghost-table analytics-table">
+                    <thead>
+                        <tr>
+                            <th>Platform</th>
+                            <th>Profiles Used</th>
+                            <th>Unique IPs</th>
+                            <th>Total Events</th>
+                            <th>Ads</th>
+                            <th>Units</th>
+                            <th>Est. Min</th>
+                            <th>Est. Avg</th>
+                            <th>Est. Max</th>
+                            <th>Last Event</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analytics-platform-body">
+                        <tr><td colspan="10">No platform data yet.</td></tr>
+                    </tbody>
+                </table>
+                
+				<h3 class="analytics-heading">Session Timeline</h3>
+
+				<div class="session-timeline-panel">
+				    <div class="session-timeline-controls">
+				        <label>
+				            Profile
+				            <select id="timeline-profile-filter" class="ghost-input" onchange="setTimelineProfileFilter(this.value)">
+				                <option value="">Latest Profile</option>
+				            </select>
+				        </label>
+
+				        <label>
+				            Session
+				            <select id="timeline-session-filter" class="ghost-input" onchange="setTimelineSessionFilter(this.value)">
+				                <option value="">Latest Session</option>
+				            </select>
+				        </label>
+
+				        <button class="btn btn-secondary" onclick="clearTimelineFilters()">LATEST</button>
+
+				        <span id="timeline-summary" class="timeline-summary">No session selected.</span>
+				    </div>
+
+				    <div id="session-timeline-body" class="session-timeline-body">
+				        <div class="timeline-empty">No timeline events yet.</div>
+				    </div>
+				</div>
+				
+				<h3 class="analytics-heading">Profile Reliability Score</h3>
+
+				<div class="profile-reliability-panel">
+				    <div class="profile-reliability-toolbar">
+				        <div>
+				            <div class="profile-reliability-title">Profile Health Ranking</div>
+				            <div id="profile-reliability-summary" class="profile-reliability-summary">
+				                No reliability data loaded yet.
+				            </div>
+				        </div>
+
+				        <div class="profile-reliability-controls">
+				            <select id="profile-reliability-filter" class="ghost-input" onchange="setProfileReliabilityFilter(this.value)">
+				                <option value="all">All Profiles</option>
+				                <option value="reliable">Reliable</option>
+				                <option value="watch">Watch</option>
+				                <option value="weak">Weak</option>
+				                <option value="bad">Bad</option>
+				                <option value="errors">Errors Only</option>
+				            </select>
+
+				            <button class="btn btn-secondary" onclick="setProfileReliabilitySort('score')">SORT SCORE</button>
+				            <button class="btn btn-secondary" onclick="setProfileReliabilitySort('errors')">SORT ERRORS</button>
+				            <button class="btn btn-secondary" onclick="setProfileReliabilitySort('recent')">SORT RECENT</button>
+							<button class="btn btn-secondary quarantine-scan-btn" onclick="applyAutoQuarantineNow()">SCAN QUARANTINE</button>
+				        </div>
+				    </div>
+
+				    <table class="ghost-table analytics-table profile-reliability-table">
+				        <thead>
+				            <tr>
+				                <th>Profile</th>
+				                <th>Score</th>
+				                <th>Grade</th>
+				                <th>Status</th>
+				                <th>Last Platform</th>
+				                <th>Last IP</th>
+				                <th>Sessions</th>
+				                <th>Events</th>
+				                <th>Errors</th>
+				                <th>Main Issue</th>
+				                <th>Last Event</th>
+				                <th>Action</th>
+				            </tr>
+				        </thead>
+				        <tbody id="profile-reliability-body">
+				            <tr><td colspan="12">No reliability data yet.</td></tr>
+				        </tbody>
+				    </table>
+				</div>
+
+                <h3 class="analytics-heading">Recent Events</h3>
+                <table class="ghost-table analytics-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>PC</th>
+                            <th>Profile</th>
+                            <th>Platform</th>
+                            <th>IP</th>
+                            <th>IP Status</th>
+                            <th>Event</th>
+                            <th>Units</th>
+                            <th>Est. Avg</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analytics-event-body">
+                        <tr><td colspan="10">No event data yet.</td></tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="pc-control-section" class="data-section" style="display: none;">
+                <div class="device-health-header">
+                    <div>
+                        <h2 class="section-title">Device Reliability + Coordinator Health</h2>
+                        <div class="section-subtitle">
+                            Tracks PCs, laptops, phones, tablets, and future mobile workers connected to the fleet.
+                        </div>
+                    </div>
+
+                    <div class="pc-control-actions">
+                        <div class="pc-control-tabbar">
+                            <button id="pc-control-tab-devices" class="btn btn-secondary pc-control-tab active" onclick="showPcControlSubtab('devices')">DEVICES</button>
+                            <button id="pc-control-tab-run-control" class="btn btn-secondary pc-control-tab" onclick="showPcControlSubtab('run-control')">RUN CONTROL</button>
+                            <button id="pc-control-tab-autoscale" class="btn btn-secondary pc-control-tab" onclick="showPcControlSubtab('autoscale')">AUTOSCALE</button>
+                            <button id="pc-control-tab-identity" class="btn btn-secondary pc-control-tab" onclick="showPcControlSubtab('identity')">PROFILE IDENTITY REPORT</button>
+                            <button id="pc-control-tab-proton" class="btn btn-secondary pc-control-tab" onclick="showPcControlSubtab('proton')">PROTON ACCOUNTS</button>
+                            <button id="pc-control-tab-route-plan" class="btn btn-secondary pc-control-tab" onclick="showPcControlSubtab('route-plan')">SAFE ROUTE PLAN</button>
+                        </div>
+                        <button class="btn" onclick="refreshWorkerTable()">REFRESH DEVICES</button>
+                    </div>
+                </div>
+
+                <div id="device-health-summary" class="device-health-summary">
+                    Device health not loaded yet.
+                </div>
+
+                <table class="ghost-table device-health-table">
+                    <thead>
+                        <tr>
+                            <th>Device ID</th>
+                            <th>Type</th>
+                            <th>Role</th>
+                            <th>Hostname</th>
+                            <th>Status</th>
+                            <th>IP Address</th>
+                            <th>Battery</th>
+                            <th>Charging</th>
+                            <th>Network</th>
+                            <th>Last Seen</th>
+                            <th>Running Profiles</th>
+                            <th>Can Launch Profiles</th>
+                            <th>Mobile Tasks</th>
+                            <th>Fleet Control</th>
+                            <th>Score</th>
+                            <th>Main Issue</th>
+                            <th>Blocked</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="worker-table-body">
+                        <tr>
+                            <td colspan="18">No device data loaded yet.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div id="run-control-panel" class="run-control-panel" style="display: none;">
+                    <div class="run-control-header">
+                        <div>
+                            <h3>Run Control Center</h3>
+                            <div class="run-control-meta">Read-only live view of profile state, session tracking, and waiting points.</div>
+                        </div>
+                        <div class="run-control-actions">
+                            <button class="btn btn-secondary" onclick="runProfileWatchdogScan()">WATCHDOG SCAN</button>
+                            <button class="btn btn-secondary" onclick="refreshRunControlCenter()">REFRESH STATUS</button>
+                        </div>
+                    </div>
+
+                    <div id="run-control-status" class="run-control-status">Waiting for run-control data.</div>
+                    <div id="run-control-summary" class="run-control-summary"></div>
+
+                    <div class="run-control-table-wrap">
+                        <table class="ghost-table run-control-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Profile</th>
+                                    <th>Status</th>
+                                    <th>Stage</th>
+                                    <th>Lifecycle</th>
+                                    <th>Age</th>
+                                    <th>Watchdog</th>
+                                    <th>Target</th>
+                                    <th>IP</th>
+                                    <th>Session</th>
+                                    <th>Debug Port</th>
+                                    <th>Process</th>
+                                    <th>Quarantine</th>
+                                </tr>
+                            </thead>
+                            <tbody id="run-control-table-body">
+                                <tr>
+                                    <td colspan="13">No run-control data loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="run-control-timeline-panel">
+                        <div class="run-control-timeline-header">
+                            <div>
+                                <h4>Recent Lifecycle Timeline</h4>
+                                <div id="run-control-watchdog-summary" class="run-control-meta">No watchdog scan has run yet.</div>
+                            </div>
+                        </div>
+                        <div class="run-control-table-wrap run-control-timeline-wrap">
+                            <table class="ghost-table run-control-timeline-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Profile</th>
+                                        <th>State</th>
+                                        <th>Status</th>
+                                        <th>Stage</th>
+                                        <th>Target</th>
+                                        <th>Source</th>
+                                        <th>Severity</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="run-control-timeline-body">
+                                    <tr>
+                                        <td colspan="8">No lifecycle events recorded yet.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="autoscale-learning-panel" class="autoscale-learning-panel" style="display: none;">
+                    <div class="autoscale-learning-header">
+                        <div>
+                            <h3>Autoscale + Learning Center</h3>
+                            <div class="autoscale-learning-meta">Resource-aware profile scaling with persistent local observations.</div>
+                        </div>
+                        <div class="autoscale-learning-actions">
+                            <button class="btn btn-secondary" onclick="refreshAutoscaleLearningPanel()">REFRESH</button>
+                            <button class="btn btn-secondary" onclick="runAutoscaleDryRun()">DRY RUN</button>
+                            <button class="btn btn-primary" onclick="runAutoscaleNow()">RUN ONCE</button>
+                        </div>
+                    </div>
+
+                    <div id="autoscale-learning-status" class="autoscale-learning-status">Waiting for autoscale data.</div>
+
+                    <div class="autoscale-config-grid">
+                        <label>Target Profiles <input id="autoscale-target-profiles" class="ghost-input" type="number" min="0" max="500" value="3"></label>
+                        <label>Min Profiles <input id="autoscale-min-profiles" class="ghost-input" type="number" min="0" max="500" value="0"></label>
+                        <label>Max Profiles <input id="autoscale-max-profiles" class="ghost-input" type="number" min="1" max="500" value="10"></label>
+                        <label>Cooldown Sec <input id="autoscale-cooldown" class="ghost-input" type="number" min="15" max="3600" value="90"></label>
+                        <label>Loop Sec <input id="autoscale-loop-interval" class="ghost-input" type="number" min="10" max="600" value="30"></label>
+                        <label>CPU High % <input id="autoscale-cpu-high" class="ghost-input" type="number" min="1" max="100" value="82"></label>
+                        <label>RAM High % <input id="autoscale-ram-high" class="ghost-input" type="number" min="1" max="100" value="88"></label>
+                        <label>GPU High % <input id="autoscale-gpu-high" class="ghost-input" type="number" min="1" max="100" value="92"></label>
+                    </div>
+
+                    <div class="autoscale-learning-actions">
+                        <button class="btn btn-secondary" onclick="saveAutoscaleConfig(false)">SAVE DISABLED</button>
+                        <button class="btn btn-primary" onclick="saveAutoscaleConfig(true)">SAVE + ENABLE</button>
+                        <button class="btn btn-secondary" onclick="disableAutoscale()">DISABLE AUTOSCALE</button>
+                    </div>
+
+                    <div id="autoscale-learning-summary" class="autoscale-learning-summary"></div>
+
+                    <div class="autoscale-learning-grid">
+                        <div>
+                            <div class="autoscale-learning-title">Recent Autoscale Events</div>
+                            <div class="autoscale-learning-table-wrap">
+                                <table class="ghost-table autoscale-learning-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Action</th>
+                                            <th>Reason</th>
+                                            <th>Active</th>
+                                            <th>Desired</th>
+                                            <th>Reward</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="autoscale-events-body">
+                                        <tr><td colspan="6">No autoscale events yet.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="autoscale-learning-title">Learning Observations</div>
+                            <div class="autoscale-learning-table-wrap">
+                                <table class="ghost-table autoscale-learning-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Event</th>
+                                            <th>Profile</th>
+                                            <th>Action</th>
+                                            <th>Result</th>
+                                            <th>Reward</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="autoscale-observations-body">
+                                        <tr><td colspan="6">No learning observations yet.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="profile-identity-report-panel" class="profile-identity-panel" style="display: none;">
+                    <div class="profile-identity-header">
+                        <div>
+                            <h3>Comet Fleet Profile Identity Report</h3>
+                            <div id="profile-identity-meta" class="profile-identity-meta">Not loaded yet.</div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="refreshProfileIdentityReport()">REFRESH REPORT</button>
+                    </div>
+
+                    <div id="profile-identity-status" class="profile-identity-status">Waiting for report data.</div>
+                    <div id="profile-identity-summary" class="profile-identity-summary"></div>
+
+                    <div class="profile-identity-table-wrap">
+                        <table class="ghost-table profile-identity-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>State</th>
+                                    <th>Type</th>
+                                    <th>Device</th>
+                                    <th>OS</th>
+                                    <th>Viewport</th>
+                                    <th>Lang</th>
+                                    <th>Platform</th>
+                                    <th>CPU</th>
+                                    <th>Mem</th>
+                                    <th>Touch</th>
+                                    <th>UA Hash</th>
+                                    <th>Identity Hash</th>
+                                    <th>Signature Hash</th>
+                                    <th>Result</th>
+                                </tr>
+                            </thead>
+                            <tbody id="profile-identity-table-body">
+                                <tr>
+                                    <td colspan="16">No report data loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="proton-account-panel" class="proton-account-panel" style="display: none;">
+                    <div class="proton-account-header">
+                        <div>
+                            <h3>Proton VPN Accounts</h3>
+                            <div class="proton-account-meta">Local encrypted vault. Passwords are hidden after import.</div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="refreshProtonAccountPanel()">REFRESH</button>
+                    </div>
+
+                    <div class="proton-import-grid">
+                        <div class="proton-import-box">
+                            <label class="proton-import-label" for="proton-account-file">Account File</label>
+                            <input id="proton-account-file" class="proton-file-input" type="file" accept=".txt,.csv">
+                        </div>
+                        <div class="proton-import-box">
+                            <label class="proton-import-label" for="proton-max-profiles">Profiles Per Account</label>
+                            <input id="proton-max-profiles" class="proton-number-input" type="number" min="1" max="20" value="4">
+                        </div>
+                    </div>
+
+                    <textarea id="proton-account-text" class="proton-account-text" placeholder="email@example.com&#10;password"></textarea>
+
+                    <div class="proton-account-actions">
+                        <button class="btn btn-primary" onclick="importProtonAccountsFromInput()">IMPORT ACCOUNTS</button>
+                        <button class="btn btn-secondary" onclick="rebalanceProtonAccounts()">REBALANCE</button>
+                    </div>
+
+                    <div id="proton-account-status" class="proton-account-status">No Proton account data loaded yet.</div>
+                    <div id="proton-account-summary" class="proton-account-summary"></div>
+
+                    <div class="proton-account-table-wrap">
+                        <table class="ghost-table proton-account-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Label</th>
+                                    <th>Username</th>
+                                    <th>Profile Limit</th>
+                                    <th>Assigned</th>
+                                    <th>Profiles</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="proton-account-table-body">
+                                <tr>
+                                    <td colspan="7">No Proton accounts imported.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="safe-route-plan-panel" class="safe-route-plan-panel" style="display: none;">
+                    <div class="safe-route-plan-header">
+                        <div>
+                            <h3>Safe Automation Route Plan</h3>
+                            <div class="safe-route-plan-meta">Randomized planning only. Public platform/channel navigation is not executed from this panel.</div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="refreshSafeRoutePlan()">REFRESH PLAN</button>
+                    </div>
+
+                    <div id="safe-route-plan-status" class="safe-route-plan-status">Waiting for route plan data.</div>
+                    <div id="safe-route-plan-summary" class="safe-route-plan-summary"></div>
+
+                    <div class="safe-route-plan-table-wrap">
+                        <table class="ghost-table safe-route-plan-table">
+                            <thead>
+                                <tr>
+                                    <th>Close/Launch Order</th>
+                                    <th>Profile</th>
+                                    <th>Last Platform</th>
+                                    <th>Planned Platforms</th>
+                                    <th>Warmup</th>
+                                    <th>Session Window</th>
+                                    <th>Target Policy</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody id="safe-route-plan-table-body">
+                                <tr>
+                                    <td colspan="8">No safe route plan loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+	
+	<div id="session-details-backdrop" class="session-details-backdrop" onclick="closeSessionDetailsDrawer()"></div>
+
+    <aside id="session-details-drawer" class="session-details-drawer">
+        <div class="session-details-header">
+            <div>
+                <div class="session-details-kicker">Session Details</div>
+                <h2 id="session-details-title">No session selected</h2>
+            </div>
+            <button class="session-details-close" onclick="closeSessionDetailsDrawer()">×</button>
+        </div>
+
+        <div id="session-details-summary" class="session-details-summary">
+            Select a session from the timeline or recent events table.
+        </div>
+
+        <div class="session-details-actions">
+            <button class="btn btn-secondary" onclick="copySelectedSessionDetails()">COPY DETAILS</button>
+            <button class="btn btn-secondary" onclick="filterDrawerEvents('all')">ALL</button>
+            <button class="btn btn-secondary" onclick="filterDrawerEvents('errors')">ERRORS</button>
+            <button class="btn btn-secondary" onclick="filterDrawerEvents('ip')">IP</button>
+            <button class="btn btn-secondary" onclick="filterDrawerEvents('platform')">PLATFORM</button>
+        </div>
+
+        <div id="session-details-event-count" class="session-details-event-count">0 events</div>
+
+        <div id="session-details-events" class="session-details-events">
+            <div class="session-details-empty">No events loaded.</div>
+        </div>
+    </aside>
+	
+    <script src="app.js?v=mobile-heartbeat-1"></script>
+
+    
+</body>
+</html>
