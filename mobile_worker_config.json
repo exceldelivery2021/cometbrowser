@@ -1,0 +1,8 @@
+{
+    "COORDINATOR_URL": "http://100.68.214.2:9555",
+    "PC_ID": "PHONE-01",
+    "DEVICE_TYPE": "Phone",
+    "HOSTNAME": "",
+    "NETWORK_TYPE": "WiFi",
+    "HEARTBEAT_SECONDS": 30
+}
