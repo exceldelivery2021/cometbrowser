@@ -17,96 +17,42 @@ class BrowserAlignmentFixer:
     
     def apply_language_fix(self, language_code):
         """
-        Apply language fix via JavaScript
-        Note: Browser was launched with previous language, this helps partially
-        
+        Apply language fix via CDP Emulation.setLocaleOverride.
+        Persists across page refreshes unlike JS injection.
+
         Args:
             language_code (str): Language code (e.g., 'en-US', 'de-DE')
-        
+
         Returns:
             bool: Success
         """
         try:
-            script = f"""
-            Object.defineProperty(navigator, 'language', {{
-                get: () => '{language_code}',
-            }});
-            Object.defineProperty(navigator, 'languages', {{
-                get: () => ['{language_code}', 'en'],
-            }});
-            
-            // Also set in document
-            document.documentElement.lang = '{language_code.split('-')[0]}';
-            """
-            
-            self.driver.execute_script(script)
+            self.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": language_code})
             self.fixes_applied.append('language')
             print(f"[Fixer {self.profile_id}] ✅ Language fix applied: {language_code}")
             return True
-        
+
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Language fix failed: {e}")
             return False
     
     def apply_timezone_fix(self, timezone_str):
         """
-        Apply timezone fix via JavaScript
-        Spoofs timezone-related JavaScript values
-        
+        Apply timezone fix via CDP Emulation.setTimezoneOverride.
+        Persists across page refreshes unlike JS injection.
+
         Args:
             timezone_str (str): IANA timezone (e.g., 'America/New_York')
-        
+
         Returns:
             bool: Success
         """
         try:
-            # Map IANA to UTC offset for this specific moment
-            # This is a simplified approach - in reality you'd calculate actual offset
-            iana_to_offset = {
-                'America/New_York': -5,
-                'America/Chicago': -6,
-                'America/Denver': -7,
-                'America/Los_Angeles': -8,
-                'Europe/London': 0,
-                'Europe/Berlin': 1,
-                'Europe/Paris': 1,
-                'Europe/Madrid': 1,
-                'Europe/Rome': 1,
-                'Europe/Amsterdam': 1,
-                'Europe/Stockholm': 1,
-                'Europe/Moscow': 3,
-                'Asia/Tokyo': 9,
-                'Asia/Singapore': 8,
-                'Asia/Hong_Kong': 8,
-                'Asia/Dubai': 4,
-                'Australia/Sydney': 11,
-            }
-            
-            offset = iana_to_offset.get(timezone_str, 0)
-            offset_minutes = offset * 60
-            
-            script = f"""
-            // Override getTimezoneOffset
-            Date.prototype.getTimezoneOffset = function() {{
-                return {offset_minutes};
-            }};
-            
-            // Also set via Intl
-            if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {{
-                const original = Intl.DateTimeFormat;
-                Intl.DateTimeFormat = class extends original {{
-                    constructor(locales, options) {{
-                        super(locales, {{...options, timeZone: '{timezone_str}'}});
-                    }}
-                }};
-            }}
-            """
-            
-            self.driver.execute_script(script)
+            self.driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": timezone_str})
             self.fixes_applied.append('timezone')
             print(f"[Fixer {self.profile_id}] ✅ Timezone fix applied: {timezone_str}")
             return True
-        
+
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Timezone fix failed: {e}")
             return False

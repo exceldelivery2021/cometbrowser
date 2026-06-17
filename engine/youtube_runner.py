@@ -205,12 +205,15 @@ class YouTubeRunner(BaseRunner):
     def _navigate_to_target(self, target):
         """Navigate to a specific channel or video"""
         try:
-            # target could be URL or channel name
-            if target.startswith("http"):
-                self.driver.get(target)
+            if isinstance(target, dict):
+                url = str(target.get("url") or target.get("identifier") or "").strip()
             else:
-                # Search for channel
-                self.driver.get(f"https://www.youtube.com/results?search_query={target}")
+                url = str(target).strip()
+
+            if url.startswith("http"):
+                self.driver.get(url)
+            else:
+                self.driver.get(f"https://www.youtube.com/results?search_query={url}")
             
             self._random_delay(2, 4)
         except Exception as e:
