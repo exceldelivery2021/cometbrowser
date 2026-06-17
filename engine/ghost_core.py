@@ -2093,15 +2093,12 @@ class GhostCore:
             )
             
             self._start_silent_alert_assassin(pid, driver, duration=8.0)
-            
+
             current_ip = ""
             current_ip_label = "IP not detected"
             ip_info = None
 
-            try:
-                ip_info = self._read_live_ip_info_from_browser(driver)
-            except Exception as e:
-                print(f"[Ghost {pid}] ⚠️ Browser IP lookup raised an error, but launch will continue: {e}")
+            ip_info = self._resolve_live_ip_with_retries(pid, driver, first_delay=8, retries=6, delay=5)
 
             if ip_info and ip_info.get("ip"):
                 current_ip = str(ip_info["ip"]).strip()
