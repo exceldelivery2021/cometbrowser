@@ -586,9 +586,11 @@ class GhostCore:
         """
         Attach Selenium to an already-running Comet/Chromium instance with retry.
 
-        Uses Selenium Manager instead of the hardcoded CHROMEDRIVER_PATH.
-        This avoids ChromeDriver 145 vs Comet/Chrome 148 mismatch.
+        Uses the explicit CHROMEDRIVER_PATH from config to avoid Selenium Manager
+        auto-selecting an incompatible ChromeDriver version.
         """
+        from selenium.webdriver.chrome.service import Service
+
         last_error = None
 
         for attempt in range(1, retries + 1):
@@ -596,7 +598,11 @@ class GhostCore:
                 opts = Options()
                 opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
 
-                driver = webdriver.Chrome(options=opts)
+                if self.driver_path and os.path.exists(self.driver_path):
+                    service = Service(executable_path=self.driver_path)
+                    driver = webdriver.Chrome(service=service, options=opts)
+                else:
+                    driver = webdriver.Chrome(options=opts)
 
                 print(f"[GhostCore] ✅ Selenium attached on port {debug_port} after attempt {attempt}/{retries}")
                 return driver
