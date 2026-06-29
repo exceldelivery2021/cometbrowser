@@ -120,7 +120,7 @@ class AlignmentVerifier:
             detected_tz_name   = self._detect_browser_timezone_name(driver)
 
             language_aligned  = self._languages_match(detected_language, expected_language)
-            timezone_aligned  = self._timezones_match(detected_offset, expected_timezone)
+            timezone_aligned  = self._timezones_match(detected_offset, expected_timezone, detected_tz_name)
 
             details = {
                 'expected_language':  expected_language,
@@ -193,13 +193,22 @@ class AlignmentVerifier:
             return True
         return d.split('-')[0] == e.split('-')[0]
 
-    def _timezones_match(self, detected_offset, expected_tz):
+    def _timezones_match(self, detected_offset, expected_tz, detected_tz_name=None):
         """
-        Check if JS getTimezoneOffset() is consistent with the IANA timezone.
-        Allows ±90 min variance to handle DST transitions.
-        Falls back to comparing the IANA name directly if Intl is available.
+        Check timezone alignment using two signals:
+        1. IANA name match (primary — spoofed by our Intl.DateTimeFormat override)
+        2. getTimezoneOffset() offset match ±90 min (fallback / DST tolerance)
+        Either signal passing is sufficient.
         """
-        if detected_offset is None or not expected_tz:
+        if not expected_tz:
+            return False
+
+        # Signal 1: IANA name match (most reliable when our Intl spoof is active)
+        if detected_tz_name:
+            if str(detected_tz_name).strip() == str(expected_tz).strip():
+                return True
+
+        if detected_offset is None:
             return False
 
         expected_offset = _IANA_TO_OFFSET.get(expected_tz)
@@ -211,11 +220,12 @@ class AlignmentVerifier:
             )
             return True
 
+        # Signal 2: offset within ±90 min
         match = abs(int(detected_offset) - expected_offset) <= 90
         if not match:
             print(
-                f"[Verifier {self.profile_id}] ❌ TZ offset mismatch: "
-                f"got {detected_offset}, expected ~{expected_offset} ({expected_tz})"
+                f"[Verifier {self.profile_id}] ❌ TZ mismatch: name={detected_tz_name} "
+                f"offset={detected_offset}, expected {expected_tz} (~{expected_offset})"
             )
         return match
 

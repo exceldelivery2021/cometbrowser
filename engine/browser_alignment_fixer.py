@@ -56,27 +56,39 @@ class BrowserAlignmentFixer:
             # 2. navigator.language — JS-visible locale
             self.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": language_code})
 
-            # 3. navigator.languages[] — persists across navigations and overrides
-            #    whatever selenium-stealth injected at launch time.
+            # 3. navigator.languages[] and navigator.language
+            #    selenium-stealth defines these with configurable:false, so
+            #    Object.defineProperty on the navigator instance fails silently.
+            #    Work-around: replace window.navigator itself with a Proxy.
+            #    window.navigator IS configurable, so this always succeeds and
+            #    intercepts every property read — including language/languages —
+            #    before the locked instance properties are reached.
             lang_js_array = str(lang_list).replace("'", '"')
             lang_override_script = f"""
                 (function() {{
                     const langs = {lang_js_array};
+                    const lang0 = langs[0];
                     try {{
-                        Object.defineProperty(navigator, 'language', {{
-                            get: function() {{ return langs[0]; }},
+                        const _nav = window.navigator;
+                        const navProxy = new Proxy(_nav, {{
+                            get: function(target, prop) {{
+                                if (prop === 'language')  return lang0;
+                                if (prop === 'languages') return langs;
+                                const val = target[prop];
+                                return (typeof val === 'function') ? val.bind(target) : val;
+                            }}
+                        }});
+                        Object.defineProperty(window, 'navigator', {{
+                            get: function() {{ return navProxy; }},
                             configurable: true
                         }});
-                    }} catch(e) {{}}
-                    try {{
-                        Object.defineProperty(navigator, 'languages', {{
-                            get: function() {{ return langs; }},
-                            configurable: true
-                        }});
-                    }} catch(e) {{}}
+                    }} catch(e) {{
+                        try {{ Object.defineProperty(navigator, 'language',  {{ get: () => lang0, configurable: true }}); }} catch(_) {{}}
+                        try {{ Object.defineProperty(navigator, 'languages', {{ get: () => langs,  configurable: true }}); }} catch(_) {{}}
+                    }}
                 }})();
             """
-            # Inject so it survives future navigations
+            # Inject so it runs on every future navigation (survives refresh)
             self.driver.execute_cdp_cmd(
                 "Page.addScriptToEvaluateOnNewDocument",
                 {"source": lang_override_script},
@@ -102,10 +114,42 @@ class BrowserAlignmentFixer:
     # Timezone
     # ------------------------------------------------------------------
 
+    # Minimal IANA → JS getTimezoneOffset() value map (UTC - local, in minutes).
+    # JS getTimezoneOffset() = -(UTC offset in minutes), e.g. UTC+1 → -60, UTC-5 → 300.
+    _TZ_OFFSET_MAP = {
+        'America/New_York': 300, 'America/Chicago': 360, 'America/Denver': 420,
+        'America/Phoenix': 420, 'America/Los_Angeles': 480, 'America/Anchorage': 540,
+        'America/Honolulu': 600, 'America/Toronto': 300, 'America/Vancouver': 480,
+        'America/Sao_Paulo': 180, 'America/Argentina/Buenos_Aires': 180,
+        'America/Mexico_City': 360, 'America/Bogota': 300, 'America/Lima': 300,
+        'America/Santiago': 180, 'America/Caracas': 270,
+        'Europe/London': 0, 'Europe/Dublin': 0, 'Europe/Lisbon': 0,
+        'Europe/Berlin': -60, 'Europe/Paris': -60, 'Europe/Madrid': -60,
+        'Europe/Rome': -60, 'Europe/Amsterdam': -60, 'Europe/Brussels': -60,
+        'Europe/Vienna': -60, 'Europe/Zurich': -60, 'Europe/Stockholm': -60,
+        'Europe/Oslo': -60, 'Europe/Copenhagen': -60, 'Europe/Warsaw': -60,
+        'Europe/Prague': -60, 'Europe/Budapest': -60,
+        'Europe/Bucharest': -120, 'Europe/Helsinki': -120, 'Europe/Athens': -120,
+        'Europe/Kiev': -120, 'Europe/Moscow': -180, 'Europe/Istanbul': -180,
+        'Africa/Cairo': -120, 'Africa/Johannesburg': -120,
+        'Africa/Lagos': -60, 'Africa/Nairobi': -180,
+        'Asia/Dubai': -240, 'Asia/Karachi': -300, 'Asia/Kolkata': -330,
+        'Asia/Dhaka': -360, 'Asia/Bangkok': -420, 'Asia/Jakarta': -420,
+        'Asia/Singapore': -480, 'Asia/Kuala_Lumpur': -480, 'Asia/Shanghai': -480,
+        'Asia/Hong_Kong': -480, 'Asia/Taipei': -480,
+        'Asia/Seoul': -540, 'Asia/Tokyo': -540,
+        'Australia/Perth': -480, 'Australia/Adelaide': -570,
+        'Australia/Sydney': -600, 'Australia/Melbourne': -600,
+        'Pacific/Auckland': -720, 'Pacific/Honolulu': 600,
+        'UTC': 0, 'Etc/UTC': 0,
+    }
+
     def apply_timezone_fix(self, timezone_str):
         """
         Apply timezone via CDP Emulation.setTimezoneOverride (takes effect on next navigation)
-        plus a JS Date.prototype override as belt-and-suspenders for the current page.
+        plus JS overrides for Date.getTimezoneOffset and Intl.DateTimeFormat as
+        belt-and-suspenders — these fire immediately on the current page AND persist
+        across navigations via addScriptToEvaluateOnNewDocument.
 
         Args:
             timezone_str: IANA timezone id, e.g. 'Europe/Amsterdam'
@@ -114,19 +158,36 @@ class BrowserAlignmentFixer:
             self.driver.execute_cdp_cmd(
                 "Emulation.setTimezoneOverride", {"timezoneId": timezone_str}
             )
-            # JS override: override Intl so timezone name reports correctly even before refresh
+
+            # Compute the expected JS offset (may be None for unknown zones)
+            js_offset = self._TZ_OFFSET_MAP.get(timezone_str)
+
+            # Build JS spoof script
+            if js_offset is not None:
+                offset_spoof = f"""
+                    // Spoof Date.prototype.getTimezoneOffset
+                    const _origGTO = Date.prototype.getTimezoneOffset;
+                    Date.prototype.getTimezoneOffset = function() {{ return {js_offset}; }};
+                """
+            else:
+                offset_spoof = ""
+
             tz_script = f"""
             (function() {{
                 const tz = "{timezone_str}";
+                {offset_spoof}
+                // Spoof Intl.DateTimeFormat so resolvedOptions().timeZone is correct
                 try {{
                     const OrigDTF = Intl.DateTimeFormat;
-                    Intl.DateTimeFormat = function(locale, opts) {{
+                    function PatchedDTF(locale, opts) {{
                         opts = Object.assign({{}}, opts || {{}});
                         if (!opts.timeZone) opts.timeZone = tz;
                         return new OrigDTF(locale, opts);
-                    }};
-                    Intl.DateTimeFormat.prototype = OrigDTF.prototype;
-                    Intl.DateTimeFormat.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+                    }}
+                    PatchedDTF.prototype = OrigDTF.prototype;
+                    PatchedDTF.supportedLocalesOf = OrigDTF.supportedLocalesOf
+                        ? OrigDTF.supportedLocalesOf.bind(OrigDTF) : undefined;
+                    Intl.DateTimeFormat = PatchedDTF;
                 }} catch(e) {{}}
             }})();
             """
@@ -138,7 +199,8 @@ class BrowserAlignmentFixer:
             except Exception:
                 pass
             self.fixes_applied.append('timezone')
-            print(f"[Fixer {self.profile_id}] ✅ Timezone fix applied: {timezone_str}")
+            print(f"[Fixer {self.profile_id}] ✅ Timezone fix applied: {timezone_str} "
+                  f"(JS offset: {js_offset})")
             return True
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Timezone fix failed: {e}")
