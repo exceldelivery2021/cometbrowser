@@ -318,7 +318,22 @@ class YouTubeRunner(BaseRunner):
     def _random_search(self):
         """Perform a random search"""
         try:
-            search_box = self.driver.find_element(By.ID, "search")
+            # Try multiple selectors — YouTube DOM has changed over time
+            search_box = None
+            for selector in [
+                (By.CSS_SELECTOR, "input#search"),
+                (By.CSS_SELECTOR, "input[name='search_query']"),
+                (By.NAME, "search_query"),
+                (By.ID, "search"),
+            ]:
+                try:
+                    search_box = self.driver.find_element(*selector)
+                    if search_box.is_displayed():
+                        break
+                except Exception:
+                    continue
+            if not search_box:
+                return
             search_box.clear()
             
             # Random search terms

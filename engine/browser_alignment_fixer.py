@@ -104,8 +104,8 @@ class BrowserAlignmentFixer:
 
     def apply_timezone_fix(self, timezone_str):
         """
-        Apply timezone via CDP Emulation.setTimezoneOverride.
-        Takes effect on the next page navigation, so must be called before refresh.
+        Apply timezone via CDP Emulation.setTimezoneOverride (takes effect on next navigation)
+        plus a JS Date.prototype override as belt-and-suspenders for the current page.
 
         Args:
             timezone_str: IANA timezone id, e.g. 'Europe/Amsterdam'
@@ -114,6 +114,29 @@ class BrowserAlignmentFixer:
             self.driver.execute_cdp_cmd(
                 "Emulation.setTimezoneOverride", {"timezoneId": timezone_str}
             )
+            # JS override: override Intl so timezone name reports correctly even before refresh
+            tz_script = f"""
+            (function() {{
+                const tz = "{timezone_str}";
+                try {{
+                    const OrigDTF = Intl.DateTimeFormat;
+                    Intl.DateTimeFormat = function(locale, opts) {{
+                        opts = Object.assign({{}}, opts || {{}});
+                        if (!opts.timeZone) opts.timeZone = tz;
+                        return new OrigDTF(locale, opts);
+                    }};
+                    Intl.DateTimeFormat.prototype = OrigDTF.prototype;
+                    Intl.DateTimeFormat.supportedLocalesOf = OrigDTF.supportedLocalesOf.bind(OrigDTF);
+                }} catch(e) {{}}
+            }})();
+            """
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": tz_script}
+            )
+            try:
+                self.driver.execute_script(tz_script)
+            except Exception:
+                pass
             self.fixes_applied.append('timezone')
             print(f"[Fixer {self.profile_id}] ✅ Timezone fix applied: {timezone_str}")
             return True

@@ -1686,10 +1686,11 @@ class GhostCore:
                 "deviceScaleFactor": float(cloak.get("device_scale_factor", 3 if is_mobile else 1)),
                 "mobile": bool(is_mobile),
             })
-            driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
-                "enabled": bool(is_mobile),
-                "maxTouchPoints": int(cloak.get("touch_points", 8 if is_mobile else 0)),
-            })
+            if is_mobile:
+                driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
+                    "enabled": True,
+                    "maxTouchPoints": int(cloak.get("touch_points", 8)),
+                })
         except Exception as e:
             print(f"[Ghost {pid}] ⚠️ Device viewport/touch override failed: {e}")
 
