@@ -190,6 +190,64 @@ function createProfile() {
     }
 }
 
+function checkAndFixDuplicateFingerprints() {
+    const btn = document.getElementById('btn-check');
+    if (!btn) return;
+    const originalText = btn.innerText;
+    btn.innerText = 'CHECKING...';
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    if (!window.pywebview || !window.pywebview.api || typeof window.pywebview.api.fix_duplicate_fingerprints !== 'function') {
+        alert('Backend bridge missing: fix_duplicate_fingerprints');
+        btn.innerText = originalText;
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        return;
+    }
+
+    window.pywebview.api.fix_duplicate_fingerprints().then(function(response) {
+        if (response && response.ok) {
+            const fixed = response.fixed || 0;
+            const msg = response.message || (fixed === 0 ? 'All fingerprints are unique.' : `Fixed ${fixed} duplicate(s).`);
+            btn.innerText = fixed === 0 ? 'ALL UNIQUE ✓' : `FIXED ${fixed} ✓`;
+            btn.style.background = fixed === 0
+                ? 'linear-gradient(145deg, #00ff7f, #009944)'
+                : 'linear-gradient(145deg, #ffea00, #b3a400)';
+            if (response.errors && response.errors.length) {
+                console.warn('[Ghost UI] Fix fingerprint errors:', response.errors);
+            }
+            console.log('[Ghost UI] Fingerprint check:', msg);
+            if (fixed > 0) {
+                setTimeout(() => refreshSessions(), 800);
+            }
+        } else {
+            btn.innerText = 'CHECK FAILED';
+            console.error('[Ghost UI] fix_duplicate_fingerprints failed:', response);
+        }
+        setTimeout(() => {
+            btn.innerText = originalText;
+            btn.style.background = '';
+            btn.style.opacity = '1';
+            btn.disabled = false;
+        }, 2500);
+    }).catch(function(err) {
+        console.error('[Ghost UI] fix_duplicate_fingerprints error:', err);
+        btn.innerText = 'CHECK FAILED';
+        setTimeout(() => {
+            btn.innerText = originalText;
+            btn.style.background = '';
+            btn.style.opacity = '1';
+            btn.disabled = false;
+        }, 2000);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const btnCheck = document.getElementById('btn-check');
+    if (btnCheck) btnCheck.addEventListener('click', checkAndFixDuplicateFingerprints);
+});
+
 // Function to collect checked IDs and send to Python
 function openSelected() {
     const selectedIds = getSelectedProfileIds();

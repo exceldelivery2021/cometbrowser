@@ -5219,6 +5219,105 @@ class BackendAPI:
                 "rows": []
             }
 
+    def fix_duplicate_fingerprints(self):
+        """Detects profiles with duplicate or missing fingerprints and regenerates them."""
+        try:
+            profiles = self._get_coordinator_profiles()
+            use_coordinator = profiles is not None
+            if profiles is None:
+                profiles = self.db.get_all_profiles()
+
+            signature_to_profiles = {}
+            for profile in profiles:
+                hardware = (
+                    profile.get("hardware_profile")
+                    or self._hardware_profile_from_text(profile.get("hardware_profile_json"))
+                    or self._hardware_profile_from_text(profile.get("hardware_cloak"))
+                    or {}
+                )
+                if not isinstance(hardware, dict):
+                    hardware = {}
+                sig = hardware.get("fingerprint_signature") or hardware.get("fingerprint_id") or ""
+                schema_ok = (
+                    isinstance(hardware, dict)
+                    and hardware.get("schema") == "comet_device_identity_v2"
+                    and str(hardware.get("type", "")).lower() in {"mobile", "desktop"}
+                )
+                profile["_hardware"] = hardware
+                profile["_sig"] = sig
+                profile["_schema_ok"] = schema_ok
+                if sig:
+                    signature_to_profiles.setdefault(sig, []).append(profile)
+
+            # Profiles that need a new fingerprint: missing identity or duplicate signature
+            needs_regen = set()
+            for profile in profiles:
+                if not profile["_schema_ok"] or not profile["_sig"]:
+                    needs_regen.add(profile.get("id"))
+            for sig, group in signature_to_profiles.items():
+                if len(group) > 1:
+                    # Keep first, regenerate the rest
+                    for p in group[1:]:
+                        needs_regen.add(p.get("id"))
+
+            if not needs_regen:
+                return {"ok": True, "fixed": 0, "message": "All fingerprints are already unique."}
+
+            # Build existing signatures from profiles that do NOT need regeneration
+            good_profiles = [p for p in profiles if p.get("id") not in needs_regen]
+            signatures = self._used_device_signatures(
+                [{"hardware_profile": p["_hardware"]} for p in good_profiles if p.get("_schema_ok")]
+            )
+
+            fixed = 0
+            errors = []
+            for profile in profiles:
+                pid = profile.get("id")
+                if pid not in needs_regen:
+                    continue
+                try:
+                    hardware_type = self._next_hardware_type(
+                        [{"hardware_profile": p["_hardware"]} for p in profiles if p.get("id") not in needs_regen]
+                    )
+                    hardware = self.ghost_core._generate_hardware_cloak(
+                        pid,
+                        existing_signatures=signatures,
+                        forced_type=hardware_type,
+                    )
+                    signatures.add(hardware.get("fingerprint_signature", ""))
+                    if hardware.get("device_name"):
+                        signatures.add(f"device:{hardware['device_name']}")
+
+                    cloak_string = hardware.get("display_string", "Device")
+                    hw_json = self._hardware_profile_json(hardware)
+
+                    if use_coordinator:
+                        self._coordinator_request(
+                            "POST",
+                            f"/api/profiles/{pid}/hardware",
+                            json={"hardware_cloak": cloak_string, "hardware_profile_json": hw_json},
+                            quiet=True,
+                        )
+                    else:
+                        self.db.update_profile_hardware(pid, cloak_string, hw_json)
+
+                    fixed += 1
+                    needs_regen.discard(pid)
+                except Exception as e:
+                    errors.append(f"Profile {pid}: {e}")
+
+            return {
+                "ok": True,
+                "fixed": fixed,
+                "errors": errors,
+                "message": f"Regenerated fingerprints for {fixed} profile(s)." + (
+                    f" {len(errors)} error(s)." if errors else ""
+                ),
+            }
+        except Exception as e:
+            print(f"[Fix Fingerprints] Failed: {e}")
+            return {"ok": False, "error": str(e)}
+
     def import_proton_accounts(self, text, max_profiles=4):
         """Imports Proton VPN accounts into the local encrypted account vault."""
         try:

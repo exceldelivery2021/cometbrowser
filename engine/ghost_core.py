@@ -1630,11 +1630,43 @@ class GhostCore:
                 except Exception:
                     pass
 
-        return self._generate_hardware_cloak(profile_id)
+        existing_sigs = self._collect_existing_fingerprint_signatures(exclude_profile_id=profile_id)
+        return self._generate_hardware_cloak(profile_id, existing_signatures=existing_sigs)
+
+    def _collect_existing_fingerprint_signatures(self, exclude_profile_id=None):
+        """Fetches all saved fingerprint signatures from the DB to prevent duplicates.
+
+        Returns a set using the same format as start_dashboard._used_device_signatures:
+        - The raw fingerprint_signature string
+        - "device:{device_name}" for device-level deduplication
+        """
+        sigs = set()
+        try:
+            profiles = self.db.get_all_profiles() if hasattr(self.db, "get_all_profiles") else []
+            for p in profiles:
+                if exclude_profile_id is not None and p.get("id") == exclude_profile_id:
+                    continue
+                hw = p.get("hardware_profile_json") or p.get("hardware_profile") or p.get("hardware_cloak") or ""
+                if isinstance(hw, str) and hw.strip().startswith("{"):
+                    try:
+                        hw = json.loads(hw)
+                    except Exception:
+                        hw = {}
+                if isinstance(hw, dict):
+                    sig = hw.get("fingerprint_signature") or hw.get("fingerprint_id")
+                    if sig:
+                        sigs.add(str(sig))
+                    device_name = hw.get("device_name")
+                    if device_name:
+                        sigs.add(f"device:{device_name}")
+        except Exception as e:
+            print(f"[GhostCore] Could not collect existing fingerprint signatures: {e}")
+        return sigs
 
     def _apply_device_cloak_to_driver(self, driver, cloak, pid=None):
         """Applies the saved device identity through Chrome DevTools and selenium-stealth."""
-        cloak = self._normalize_hardware_cloak(cloak, profile_id=pid) or self._generate_hardware_cloak(pid or 0)
+        existing_sigs = self._collect_existing_fingerprint_signatures(exclude_profile_id=pid)
+        cloak = self._normalize_hardware_cloak(cloak, profile_id=pid) or self._generate_hardware_cloak(pid or 0, existing_signatures=existing_sigs)
         width, height = cloak["resolution"]
         is_mobile = bool(cloak.get("mobile", True)) and str(cloak.get("type", "")).lower() != "desktop"
 

@@ -925,6 +925,27 @@ def create_profile():
         conn.close()
 
 
+@app.route("/api/profiles/<int:profile_id>/hardware", methods=["POST"])
+def update_profile_hardware(profile_id):
+    data = request.get_json(force=True) or {}
+    hardware_cloak = str(data.get("hardware_cloak", "")).strip() or "Pending Execution"
+    hardware_profile_json = str(data.get("hardware_profile_json", "") or "").strip()
+    now = now_ts()
+
+    conn = get_db()
+    try:
+        result = conn.execute(
+            "UPDATE profiles SET hardware_cloak = ?, hardware_profile_json = ?, updated_at = ? WHERE id = ?",
+            (hardware_cloak, hardware_profile_json, now, profile_id),
+        )
+        if result.rowcount == 0:
+            return jsonify({"ok": False, "error": "profile not found"}), 404
+        row = conn.execute("SELECT * FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+        return jsonify({"ok": True, "profile": row_to_dict(row)})
+    finally:
+        conn.close()
+
+
 @app.route("/api/profiles/<int:profile_id>/acquire", methods=["POST"])
 def acquire_profile(profile_id):
     data = request.get_json(force=True) or {}
