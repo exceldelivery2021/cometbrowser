@@ -88,43 +88,57 @@ class IPGeolocationQuery:
             return None
     
     def _infer_language_from_country(self, country_code):
-        """Infer primary language from country code"""
+        """Map ISO 3166-1 alpha-2 country code to primary BCP-47 language tag."""
         country_to_language = {
-            'US': 'en-US',
-            'CA': 'en-CA',
-            'GB': 'en-GB',
-            'AU': 'en-AU',
-            'NZ': 'en-NZ',
-            'DE': 'de-DE',
-            'AT': 'de-AT',
-            'CH': 'de-CH',
-            'FR': 'fr-FR',
-            'BE': 'fr-BE',
-            'ES': 'es-ES',
-            'MX': 'es-MX',
-            'AR': 'es-AR',
-            'IT': 'it-IT',
-            'NL': 'nl-NL',
-            'SE': 'sv-SE',
-            'NO': 'nb-NO',
-            'DK': 'da-DK',
-            'PL': 'pl-PL',
-            'RU': 'ru-RU',
-            'JP': 'ja-JP',
-            'KR': 'ko-KR',
-            'CN': 'zh-CN',
-            'HK': 'zh-HK',
-            'SG': 'zh-SG',
-            'TW': 'zh-TW',
-            'IN': 'en-IN',
-            'BR': 'pt-BR',
-            'PT': 'pt-PT',
-            'ZA': 'en-ZA',
-            'AE': 'ar-AE',
-            'IL': 'he-IL',
-            'TH': 'th-TH',
+            # English
+            'US': 'en-US', 'CA': 'en-CA', 'GB': 'en-GB', 'AU': 'en-AU',
+            'NZ': 'en-NZ', 'IE': 'en-IE', 'ZA': 'en-ZA', 'IN': 'en-IN',
+            'NG': 'en-NG', 'GH': 'en-GH', 'KE': 'en-KE', 'PH': 'en-PH',
+            'SG': 'en-SG', 'MY': 'ms-MY',
+            # German
+            'DE': 'de-DE', 'AT': 'de-AT', 'CH': 'de-CH', 'LI': 'de-LI',
+            'LU': 'lb-LU',
+            # French
+            'FR': 'fr-FR', 'BE': 'fr-BE', 'MC': 'fr-MC',
+            # Spanish
+            'ES': 'es-ES', 'MX': 'es-MX', 'AR': 'es-AR', 'CO': 'es-CO',
+            'CL': 'es-CL', 'PE': 'es-PE', 'VE': 'es-VE', 'EC': 'es-EC',
+            'BO': 'es-BO', 'PY': 'es-PY', 'UY': 'es-UY', 'CR': 'es-CR',
+            'GT': 'es-GT', 'HN': 'es-HN', 'SV': 'es-SV', 'NI': 'es-NI',
+            'PA': 'es-PA', 'DO': 'es-DO', 'CU': 'es-CU',
+            # Portuguese
+            'BR': 'pt-BR', 'PT': 'pt-PT', 'AO': 'pt-AO', 'MZ': 'pt-MZ',
+            # Dutch
+            'NL': 'nl-NL', 'SR': 'nl-SR',
+            # Italian
+            'IT': 'it-IT', 'SM': 'it-SM', 'VA': 'it-VA',
+            # Nordic
+            'SE': 'sv-SE', 'NO': 'nb-NO', 'DK': 'da-DK', 'FI': 'fi-FI',
+            'IS': 'is-IS',
+            # Eastern European
+            'PL': 'pl-PL', 'CZ': 'cs-CZ', 'SK': 'sk-SK', 'HU': 'hu-HU',
+            'RO': 'ro-RO', 'BG': 'bg-BG', 'HR': 'hr-HR', 'SI': 'sl-SI',
+            'RS': 'sr-RS', 'UA': 'uk-UA', 'BY': 'be-BY',
+            # Russian / CIS
+            'RU': 'ru-RU', 'KZ': 'ru-KZ', 'UZ': 'uz-UZ', 'GE': 'ka-GE',
+            'AM': 'hy-AM', 'AZ': 'az-AZ',
+            # Middle East / North Africa
+            'AE': 'ar-AE', 'SA': 'ar-SA', 'EG': 'ar-EG', 'IQ': 'ar-IQ',
+            'JO': 'ar-JO', 'KW': 'ar-KW', 'LB': 'ar-LB', 'LY': 'ar-LY',
+            'MA': 'ar-MA', 'QA': 'ar-QA', 'SY': 'ar-SY', 'TN': 'ar-TN',
+            'YE': 'ar-YE', 'IL': 'he-IL', 'TR': 'tr-TR', 'IR': 'fa-IR',
+            # South / Southeast Asia
+            'TH': 'th-TH', 'VN': 'vi-VN', 'ID': 'id-ID', 'MM': 'my-MM',
+            'KH': 'km-KH', 'LA': 'lo-LA', 'BD': 'bn-BD', 'PK': 'ur-PK',
+            'LK': 'si-LK', 'NP': 'ne-NP',
+            # East Asia
+            'CN': 'zh-CN', 'HK': 'zh-HK', 'TW': 'zh-TW', 'JP': 'ja-JP',
+            'KR': 'ko-KR', 'MN': 'mn-MN',
+            # Africa
+            'DZ': 'ar-DZ', 'ET': 'am-ET', 'TZ': 'sw-TZ', 'UG': 'sw-UG',
+            # Americas (other)
+            'HT': 'ht-HT', 'JM': 'en-JM', 'TT': 'en-TT',
         }
-        
         country_code = str(country_code).upper()
         return country_to_language.get(country_code, 'en-US')
     

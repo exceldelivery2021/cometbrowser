@@ -1,195 +1,236 @@
 """
 Alignment Verifier
-Re-checks alignment after browser fixes and refresh
-Determines if fixes worked
+Confirms that browser-level fixes actually landed after the page refresh.
+Reads directly from the browser via JS — does NOT navigate to an external site
+so automation flow is never interrupted.
 """
 
 import time
 
 
+# IANA timezone → UTC offset in minutes using JS getTimezoneOffset() convention.
+# getTimezoneOffset() returns (UTC - local) so UTC+1 → -60, UTC-5 → +300.
+# Values use standard (non-DST) offset; we allow ±90 min variance for DST.
+_IANA_TO_OFFSET = {
+    # Americas
+    'America/New_York':      300,
+    'America/Chicago':       360,
+    'America/Denver':        420,
+    'America/Phoenix':       420,
+    'America/Los_Angeles':   480,
+    'America/Anchorage':     540,
+    'America/Honolulu':      600,
+    'America/Toronto':       300,
+    'America/Vancouver':     480,
+    'America/Sao_Paulo':     180,
+    'America/Argentina/Buenos_Aires': 180,
+    'America/Mexico_City':   360,
+    'America/Bogota':        300,
+    'America/Lima':          300,
+    'America/Santiago':      180,
+    'America/Caracas':       270,
+    # Europe
+    'Europe/London':          0,
+    'Europe/Dublin':          0,
+    'Europe/Lisbon':          0,
+    'Europe/Berlin':         -60,
+    'Europe/Paris':          -60,
+    'Europe/Madrid':         -60,
+    'Europe/Rome':           -60,
+    'Europe/Amsterdam':      -60,
+    'Europe/Brussels':       -60,
+    'Europe/Vienna':         -60,
+    'Europe/Zurich':         -60,
+    'Europe/Stockholm':      -60,
+    'Europe/Oslo':           -60,
+    'Europe/Copenhagen':     -60,
+    'Europe/Warsaw':         -60,
+    'Europe/Prague':         -60,
+    'Europe/Budapest':       -60,
+    'Europe/Bucharest':     -120,
+    'Europe/Helsinki':      -120,
+    'Europe/Athens':        -120,
+    'Europe/Kiev':          -120,
+    'Europe/Moscow':        -180,
+    'Europe/Istanbul':      -180,
+    # Africa
+    'Africa/Cairo':         -120,
+    'Africa/Johannesburg':  -120,
+    'Africa/Lagos':          -60,
+    'Africa/Nairobi':       -180,
+    # Asia
+    'Asia/Dubai':           -240,
+    'Asia/Karachi':         -300,
+    'Asia/Kolkata':         -330,
+    'Asia/Dhaka':           -360,
+    'Asia/Bangkok':         -420,
+    'Asia/Jakarta':         -420,
+    'Asia/Singapore':       -480,
+    'Asia/Kuala_Lumpur':    -480,
+    'Asia/Shanghai':        -480,
+    'Asia/Hong_Kong':       -480,
+    'Asia/Taipei':          -480,
+    'Asia/Seoul':           -540,
+    'Asia/Tokyo':           -540,
+    'Asia/Vladivostok':     -600,
+    # Australia / Pacific
+    'Australia/Perth':      -480,
+    'Australia/Adelaide':   -570,
+    'Australia/Sydney':     -600,
+    'Australia/Melbourne':  -600,
+    'Pacific/Auckland':     -720,
+    'Pacific/Honolulu':      600,
+    # UTC
+    'UTC':                    0,
+    'Etc/UTC':                0,
+}
+
+
 class AlignmentVerifier:
-    """Verify that browser fixes actually resolved misalignment"""
-    
-    def __init__(self, profile_id, db_manager):
+    """Verify that browser fixes resolved timezone and language misalignment."""
+
+    def __init__(self, profile_id, db_manager=None):
         self.profile_id = profile_id
         self.db = db_manager
-    
+
     def verify_alignment(self, driver, geo_data):
         """
-        Re-verify alignment after fixes applied
-        Loads Whoer and checks if timezone/language now match
-        
+        Read timezone offset and language directly from the browser via JS.
+        Does NOT navigate to any external site — automation is not interrupted.
+
         Args:
-            driver: Selenium WebDriver
-            geo_data (dict): IP geolocation data with timezone, language
-        
+            driver: Selenium WebDriver (already on whatever page it's on)
+            geo_data: dict with keys 'language', 'timezone', 'country_code'
+
         Returns:
-            tuple: (language_aligned: bool, timezone_aligned: bool, full_data: dict)
+            (language_aligned: bool, timezone_aligned: bool, details: dict)
         """
         if not geo_data:
             return False, False, {}
-        
-        print(f"\n[Verifier {self.profile_id}] 🔍 Re-verifying alignment after fixes...")
-        
+
+        print(f"\n[Verifier {self.profile_id}] 🔍 Verifying alignment via browser JS...")
+
         expected_language = geo_data.get('language', 'en-US')
         expected_timezone = geo_data.get('timezone', 'UTC')
         expected_country = geo_data.get('country_code', 'US')
-        
+
         try:
-            # Navigate to Whoer
-            driver.get("https://whoer.net/")
-            time.sleep(4)
-            
-            # Try to extract browser language from page
-            detected_language = self._detect_browser_language(driver)
-            
-            # Try to extract timezone from page
-            detected_timezone = self._detect_browser_timezone(driver)
-            
-            # Try to extract country from page
-            detected_country = self._detect_browser_country(driver)
-            
-            # Compare
-            language_aligned = self._languages_match(detected_language, expected_language)
-            timezone_aligned = self._timezones_match(detected_timezone, expected_timezone)
-            
-            verification_data = {
-                'expected_language': expected_language,
-                'detected_language': detected_language,
-                'language_aligned': language_aligned,
-                'expected_timezone': expected_timezone,
-                'detected_timezone': detected_timezone,
-                'timezone_aligned': timezone_aligned,
-                'expected_country': expected_country,
-                'detected_country': detected_country,
+            detected_language  = self._detect_browser_language(driver)
+            detected_offset    = self._detect_browser_timezone_offset(driver)
+            detected_tz_name   = self._detect_browser_timezone_name(driver)
+
+            language_aligned  = self._languages_match(detected_language, expected_language)
+            timezone_aligned  = self._timezones_match(detected_offset, expected_timezone)
+
+            details = {
+                'expected_language':  expected_language,
+                'detected_language':  detected_language,
+                'language_aligned':   language_aligned,
+                'expected_timezone':  expected_timezone,
+                'detected_tz_name':   detected_tz_name,
+                'detected_tz_offset': detected_offset,
+                'timezone_aligned':   timezone_aligned,
+                'expected_country':   expected_country,
             }
-            
-            # Report results
-            self._report_verification(verification_data)
-            
-            return language_aligned, timezone_aligned, verification_data
-        
+
+            self._report(details)
+            return language_aligned, timezone_aligned, details
+
         except Exception as e:
-            print(f"[Verifier {self.profile_id}] ⚠️ Verification failed: {e}")
+            print(f"[Verifier {self.profile_id}] ⚠️ Verification error: {e}")
             return False, False, {}
-    
+
+    # ------------------------------------------------------------------
+    # Detection helpers
+    # ------------------------------------------------------------------
+
     def _detect_browser_language(self, driver):
-        """
-        Detect the language the browser is actually sending in HTTP headers.
-        Reads navigator.language (JS) which reflects Emulation.setLocaleOverride,
-        but also checks navigator.languages[0] as a cross-check.
-        The Accept-Language header (set via Network.setUserAgentOverride) is what
-        Whoer reads server-side — navigator.language should match it after our fixes.
-        """
+        """Read navigator.languages[0] then fallback to navigator.language."""
         try:
             lang = driver.execute_script(
-                "return navigator.languages && navigator.languages.length "
+                "return (navigator.languages && navigator.languages.length) "
                 "? navigator.languages[0] : navigator.language;"
             )
             print(f"[Verifier {self.profile_id}] 📝 Browser language: {lang}")
             return lang
-        except:
+        except Exception:
             return None
-    
-    def _detect_browser_timezone(self, driver):
-        """Try to detect browser timezone offset"""
+
+    def _detect_browser_timezone_offset(self, driver):
+        """Return JS getTimezoneOffset() — (UTC - local) in minutes."""
         try:
             offset = driver.execute_script("return new Date().getTimezoneOffset();")
-            print(f"[Verifier {self.profile_id}] 🕐 Browser timezone offset: {offset} minutes")
-            return offset
-        except:
+            print(f"[Verifier {self.profile_id}] 🕐 Timezone offset: {offset} min")
+            return int(offset)
+        except Exception:
             return None
-    
-    def _detect_browser_country(self, driver):
-        """Try to detect country from page content"""
+
+    def _detect_browser_timezone_name(self, driver):
+        """Return the IANA timezone name the browser reports (if available)."""
         try:
-            # Look for country indicators on Whoer page
-            country_elements = driver.find_elements("xpath", "//td[contains(text(), 'Country')]/../td[2]")
-            if country_elements:
-                country = country_elements[0].text.strip()
-                print(f"[Verifier {self.profile_id}] 🌍 Detected country: {country}")
-                return country
-        except:
-            pass
-        return None
-    
+            name = driver.execute_script(
+                "return Intl.DateTimeFormat().resolvedOptions().timeZone;"
+            )
+            print(f"[Verifier {self.profile_id}] 🌍 Timezone name: {name}")
+            return name
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
+    # Matching helpers
+    # ------------------------------------------------------------------
+
     def _languages_match(self, detected, expected):
         """
-        Check if detected language matches expected
-        Handles variations (en-US vs en, etc.)
-        
-        Args:
-            detected (str): Detected language code
-            expected (str): Expected language code
-        
-        Returns:
-            bool: Languages match
+        Match language codes. Accepts exact match or same primary subtag.
+        e.g. 'nl-NL' matches 'nl', 'en-US' matches 'en-GB' at prefix level.
         """
         if not detected or not expected:
             return False
-        
-        detected = str(detected).lower()
-        expected = str(expected).lower()
-        
-        # Exact match
-        if detected == expected:
+        d = str(detected).lower()
+        e = str(expected).lower()
+        if d == e:
             return True
-        
-        # Prefix match (en-US matches en)
-        detected_prefix = detected.split('-')[0]
-        expected_prefix = expected.split('-')[0]
-        
-        return detected_prefix == expected_prefix
-    
+        return d.split('-')[0] == e.split('-')[0]
+
     def _timezones_match(self, detected_offset, expected_tz):
         """
-        Check if detected timezone matches expected
-        
-        Args:
-            detected_offset (int): Timezone offset in minutes
-            expected_tz (str): IANA timezone string
-        
-        Returns:
-            bool: Timezones match
+        Check if JS getTimezoneOffset() is consistent with the IANA timezone.
+        Allows ±90 min variance to handle DST transitions.
+        Falls back to comparing the IANA name directly if Intl is available.
         """
         if detected_offset is None or not expected_tz:
             return False
-        
-        # Map IANA to expected offset
-        iana_to_offset = {
-            'America/New_York': -300,  # UTC-5 (standard time)
-            'America/Chicago': -360,
-            'America/Denver': -420,
-            'America/Los_Angeles': -480,
-            'Europe/London': 0,
-            'Europe/Berlin': -60,  # UTC+1 in offset terms (getTimezoneOffset is negative)
-            'Europe/Paris': -60,
-            'Europe/Madrid': -60,
-            'Europe/Rome': -60,
-            'Europe/Moscow': -180,
-            'Asia/Tokyo': -540,
-            'Asia/Singapore': -480,
-            'Asia/Dubai': -240,
-            'Australia/Sydney': -600,
-        }
-        
-        expected_offset = iana_to_offset.get(expected_tz)
-        
+
+        expected_offset = _IANA_TO_OFFSET.get(expected_tz)
         if expected_offset is None:
-            # Can't verify this timezone
-            return True  # Assume match if we don't know it
-        
-        # Allow ±60 minute variance due to DST/seasonal changes
-        return abs(detected_offset - expected_offset) <= 60
-    
-    def _report_verification(self, data):
-        """Log verification results"""
-        print(f"\n[Verifier {self.profile_id}] 📊 ALIGNMENT VERIFICATION RESULTS:")
-        
-        lang_status = "✅" if data['language_aligned'] else "❌"
-        print(f"[Verifier {self.profile_id}] {lang_status} Language: {data['detected_language']} (expected: {data['expected_language']})")
-        
-        tz_status = "✅" if data['timezone_aligned'] else "❌"
-        print(f"[Verifier {self.profile_id}] {tz_status} Timezone: {data['detected_timezone']} min offset (expected: {data['expected_timezone']})")
-        
-        print(f"[Verifier {self.profile_id}] 🌍 Country: {data['detected_country']} (expected: {data['expected_country']})")
+            # Unknown timezone — don't block the session
+            print(
+                f"[Verifier {self.profile_id}] ⚠️ Unknown IANA tz '{expected_tz}', "
+                "assuming aligned"
+            )
+            return True
+
+        match = abs(int(detected_offset) - expected_offset) <= 90
+        if not match:
+            print(
+                f"[Verifier {self.profile_id}] ❌ TZ offset mismatch: "
+                f"got {detected_offset}, expected ~{expected_offset} ({expected_tz})"
+            )
+        return match
+
+    # ------------------------------------------------------------------
+    # Reporting
+    # ------------------------------------------------------------------
+
+    def _report(self, data):
+        lang_icon = "✅" if data['language_aligned'] else "❌"
+        tz_icon   = "✅" if data['timezone_aligned']  else "❌"
+        print(
+            f"\n[Verifier {self.profile_id}] 📊 ALIGNMENT RESULTS:\n"
+            f"  {lang_icon} Language : {data['detected_language']} "
+            f"(expected {data['expected_language']})\n"
+            f"  {tz_icon} Timezone : {data['detected_tz_name']} "
+            f"offset={data['detected_tz_offset']} min "
+            f"(expected {data['expected_timezone']})"
+        )

@@ -1,245 +1,292 @@
 """
 Browser Alignment Fixer
-Applies browser-level fixes for timezone, language, and DNS
-Does NOT require system-level changes
+Applies browser-level fixes for timezone, language, and DNS after IP detection.
+All fixes use CDP so they persist across page refreshes.
 """
 
 import time
 
 
 class BrowserAlignmentFixer:
-    """Fix timezone/language/DNS misalignment at browser level"""
-    
+    """Fix timezone/language/geolocation/WebRTC misalignment at browser level."""
+
     def __init__(self, driver, profile_id):
         self.driver = driver
         self.profile_id = profile_id
         self.fixes_applied = []
-    
+
+    # ------------------------------------------------------------------
+    # Language
+    # ------------------------------------------------------------------
+
     def apply_language_fix(self, language_code):
         """
-        Apply language fix via CDP.
-        - Emulation.setLocaleOverride  → navigator.language (JS-visible)
-        - Network.setUserAgentOverride → Accept-Language HTTP header (server-visible)
+        Align all language surfaces to match the IP's country language.
 
-        Both must be set; Whoer reads the HTTP header server-side, not navigator.language.
+        Three surfaces must match or Whoer/sites will flag a mismatch:
+          1. Accept-Language HTTP header  (Network.setUserAgentOverride → acceptLanguage)
+          2. navigator.language           (Emulation.setLocaleOverride)
+          3. navigator.languages[]        (Page.addScriptToEvaluateOnNewDocument override,
+                                           run immediately via execute_script as well)
 
         Args:
-            language_code (str): Language code (e.g., 'en-US', 'de-DE')
-
-        Returns:
-            bool: Success
+            language_code: BCP-47 tag, e.g. 'nl-NL', 'de-DE', 'en-US'
         """
         try:
-            # Build Accept-Language header value: primary + English fallback
-            base = language_code.split('-')[0]  # e.g. 'nl' from 'nl-NL'
+            base = language_code.split('-')[0]  # 'nl' from 'nl-NL'
+
+            # Build a realistic Accept-Language header value.
             if base == 'en':
                 accept_lang = f"{language_code};q=1.0"
+                lang_list = [language_code]
             else:
-                accept_lang = f"{language_code};q=1.0,{base};q=0.9,en;q=0.8"
+                accept_lang = f"{language_code};q=1.0,{base};q=0.9,en-US;q=0.8,en;q=0.7"
+                lang_list = [language_code, base, "en-US", "en"]
 
-            # Fix navigator.language (JS)
-            self.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": language_code})
-
-            # Fix Accept-Language HTTP header — this is what Whoer and sites read server-side
+            # 1. Accept-Language HTTP header — what servers read
             try:
                 current_ua = self.driver.execute_script("return navigator.userAgent;") or ""
                 self.driver.execute_cdp_cmd("Network.setUserAgentOverride", {
                     "userAgent": current_ua,
                     "acceptLanguage": accept_lang,
                 })
-            except Exception as e2:
-                print(f"[Fixer {self.profile_id}] ⚠️ Accept-Language header update failed: {e2}")
+            except Exception as e:
+                print(f"[Fixer {self.profile_id}] ⚠️ Accept-Language header update failed: {e}")
+
+            # 2. navigator.language — JS-visible locale
+            self.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": language_code})
+
+            # 3. navigator.languages[] — persists across navigations and overrides
+            #    whatever selenium-stealth injected at launch time.
+            lang_js_array = str(lang_list).replace("'", '"')
+            lang_override_script = f"""
+                (function() {{
+                    const langs = {lang_js_array};
+                    try {{
+                        Object.defineProperty(navigator, 'language', {{
+                            get: function() {{ return langs[0]; }},
+                            configurable: true
+                        }});
+                    }} catch(e) {{}}
+                    try {{
+                        Object.defineProperty(navigator, 'languages', {{
+                            get: function() {{ return langs; }},
+                            configurable: true
+                        }});
+                    }} catch(e) {{}}
+                }})();
+            """
+            # Inject so it survives future navigations
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": lang_override_script},
+            )
+            # Apply to the current page immediately
+            try:
+                self.driver.execute_script(lang_override_script)
+            except Exception:
+                pass
 
             self.fixes_applied.append('language')
-            print(f"[Fixer {self.profile_id}] ✅ Language fix applied: {language_code} (Accept-Language: {accept_lang})")
+            print(
+                f"[Fixer {self.profile_id}] ✅ Language fix applied: {language_code} "
+                f"| Accept-Language: {accept_lang}"
+            )
             return True
 
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Language fix failed: {e}")
             return False
-    
+
+    # ------------------------------------------------------------------
+    # Timezone
+    # ------------------------------------------------------------------
+
     def apply_timezone_fix(self, timezone_str):
         """
-        Apply timezone fix via CDP Emulation.setTimezoneOverride.
-        Persists across page refreshes unlike JS injection.
+        Apply timezone via CDP Emulation.setTimezoneOverride.
+        Takes effect on the next page navigation, so must be called before refresh.
 
         Args:
-            timezone_str (str): IANA timezone (e.g., 'America/New_York')
-
-        Returns:
-            bool: Success
+            timezone_str: IANA timezone id, e.g. 'Europe/Amsterdam'
         """
         try:
-            self.driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": timezone_str})
+            self.driver.execute_cdp_cmd(
+                "Emulation.setTimezoneOverride", {"timezoneId": timezone_str}
+            )
             self.fixes_applied.append('timezone')
             print(f"[Fixer {self.profile_id}] ✅ Timezone fix applied: {timezone_str}")
             return True
-
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Timezone fix failed: {e}")
             return False
-    
+
+    # ------------------------------------------------------------------
+    # Geolocation
+    # ------------------------------------------------------------------
+
     def apply_geolocation_spoof(self, latitude, longitude):
         """
-        Spoof geolocation to match IP location
-        
-        Args:
-            latitude (float): IP's latitude
-            longitude (float): IP's longitude
-        
-        Returns:
-            bool: Success
+        Spoof navigator.geolocation to match the IP's coordinates.
+        JS-injected, so must be re-applied after each page navigation.
         """
         try:
             script = f"""
-            const mockGeolocation = {{
-                getCurrentPosition: function(success, error) {{
-                    success({{
-                        coords: {{
-                            latitude: {latitude},
-                            longitude: {longitude},
-                            accuracy: 50
-                        }}
+            (function() {{
+                const lat = {float(latitude)};
+                const lon = {float(longitude)};
+                const mockGeo = {{
+                    getCurrentPosition: function(success, error, opts) {{
+                        success({{ coords: {{ latitude: lat, longitude: lon, accuracy: 50,
+                            altitude: null, altitudeAccuracy: null, heading: null, speed: null }},
+                            timestamp: Date.now() }});
+                    }},
+                    watchPosition: function(success, error, opts) {{
+                        success({{ coords: {{ latitude: lat, longitude: lon, accuracy: 50,
+                            altitude: null, altitudeAccuracy: null, heading: null, speed: null }},
+                            timestamp: Date.now() }});
+                        return 1;
+                    }},
+                    clearWatch: function(id) {{}}
+                }};
+                try {{
+                    Object.defineProperty(navigator, 'geolocation', {{
+                        get: function() {{ return mockGeo; }},
+                        configurable: true
                     }});
-                }},
-                watchPosition: function(success, error) {{
-                    success({{
-                        coords: {{
-                            latitude: {latitude},
-                            longitude: {longitude},
-                            accuracy: 50
-                        }}
-                    }});
-                    return 1;
-                }},
-                clearWatch: function(id) {{}}
-            }};
-            
-            Object.defineProperty(navigator, 'geolocation', {{
-                value: mockGeolocation,
-                writable: true
-            }});
+                }} catch(e) {{}}
+            }})();
             """
-            
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": script}
+            )
             self.driver.execute_script(script)
             self.fixes_applied.append('geolocation')
             print(f"[Fixer {self.profile_id}] ✅ Geolocation spoof applied: {latitude}, {longitude}")
             return True
-        
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Geolocation spoof failed: {e}")
             return False
-    
-    def apply_webrtc_dns_fix(self):
+
+    # ------------------------------------------------------------------
+    # WebRTC leak prevention
+    # ------------------------------------------------------------------
+
+    def apply_webrtc_fix(self):
         """
-        Prevent WebRTC IP leak
-        Note: Relies on browser launch args already having --force-webrtc-ip-handling-policy
-        This just ensures it's enforced
-        
-        Returns:
-            bool: Success
+        Prevent WebRTC from leaking the real local/public IP.
+
+        Overrides RTCPeerConnection so ICE candidate gathering never exposes
+        non-VPN addresses. The browser launch args already include
+        --force-webrtc-ip-handling-policy=disable_non_proxied_udp, but this
+        JS override adds a second layer for sites that probe via the API.
         """
         try:
             script = """
-            // Disable WebRTC leak if possible
-            try {
-                navigator.mediaDevices.getUserMedia({ audio: false, video: true })
-                    .then(stream => {
-                        stream.getTracks().forEach(track => track.stop());
-                    })
-                    .catch(e => {});
-            } catch (e) {}
+            (function() {
+                const OrigRTCPC = window.RTCPeerConnection
+                    || window.webkitRTCPeerConnection
+                    || window.mozRTCPeerConnection;
+                if (!OrigRTCPC) return;
+
+                function FakeRTCPC(config, constraints) {
+                    // Strip any iceServers so STUN/TURN never resolve a real IP
+                    const safeConfig = Object.assign({}, config || {}, { iceServers: [] });
+                    const pc = new OrigRTCPC(safeConfig, constraints);
+                    return pc;
+                }
+                FakeRTCPC.prototype = OrigRTCPC.prototype;
+                FakeRTCPC.generateCertificate = OrigRTCPC.generateCertificate
+                    ? OrigRTCPC.generateCertificate.bind(OrigRTCPC) : undefined;
+
+                try {
+                    Object.defineProperty(window, 'RTCPeerConnection', {
+                        get: function() { return FakeRTCPC; }, configurable: true
+                    });
+                    window.webkitRTCPeerConnection = FakeRTCPC;
+                    window.mozRTCPeerConnection = FakeRTCPC;
+                } catch(e) {}
+            })();
             """
-            
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": script}
+            )
             self.driver.execute_script(script)
-            self.fixes_applied.append('webrtc_dns')
-            print(f"[Fixer {self.profile_id}] ✅ WebRTC DNS fix applied")
+            self.fixes_applied.append('webrtc')
+            print(f"[Fixer {self.profile_id}] ✅ WebRTC leak prevention applied")
             return True
-        
         except Exception as e:
-            print(f"[Fixer {self.profile_id}] ⚠️ WebRTC DNS fix failed: {e}")
+            print(f"[Fixer {self.profile_id}] ⚠️ WebRTC fix failed: {e}")
             return False
-    
+
+    # ------------------------------------------------------------------
+    # Orchestration
+    # ------------------------------------------------------------------
+
     def apply_all_fixes(self, geo_data):
         """
-        Apply all browser alignment fixes
-        
+        Apply CDP-level fixes (timezone + language) that must be set BEFORE the
+        next navigation, then stash geo coords for apply_post_refresh_fixes().
+
+        Call order in ghost_core:
+            fixer.apply_all_fixes(geo_data)   ← CDP overrides (this method)
+            fixer.refresh_browser()            ← navigates; CDP overrides take effect;
+                                                  calls apply_post_refresh_fixes() internally
+
         Args:
-            geo_data (dict): Geolocation data from IPGeolocationQuery
-                Required keys: timezone, language, latitude, longitude
-        
-        Returns:
-            bool: All fixes applied successfully
+            geo_data: dict from IPGeolocationQuery with keys:
+                      timezone, language, latitude, longitude
         """
         if not geo_data:
             print(f"[Fixer {self.profile_id}] ❌ No geolocation data provided")
             return False
-        
+
         print(f"\n[Fixer {self.profile_id}] 🔧 Applying browser alignment fixes...")
-        time.sleep(0.5)
 
         results = []
 
-        # Timezone and language MUST be set before the next page navigation to take full effect.
-        # Apply both CDP overrides first, then refresh, then inject JS-level spoofs.
-
-        # 1. Apply timezone fix (CDP — takes effect on next navigation)
+        # CDP overrides — must come BEFORE the page refresh
         timezone = geo_data.get('timezone', 'UTC')
         results.append(self.apply_timezone_fix(timezone))
-        time.sleep(0.2)
 
-        # 2. Apply language fix (CDP — sets both navigator.language and Accept-Language header)
         language = geo_data.get('language', 'en-US')
         results.append(self.apply_language_fix(language))
-        time.sleep(0.2)
 
-        # NOTE: refresh_browser() is called by ghost_core after apply_all_fixes() returns.
-        # Geolocation and WebRTC spoofs are JS-injected so they must run AFTER the refresh
-        # (called via apply_post_refresh_fixes). Apply them here so ghost_core can call
-        # apply_post_refresh_fixes() after refresh_browser().
+        # Stash geo coords; JS spoofs run after refresh in apply_post_refresh_fixes
         self._pending_geo = (
             geo_data.get('latitude', 40.7128),
             geo_data.get('longitude', -74.0060),
         )
 
-        all_success = all(results)
-        
-        if all_success:
-            print(f"[Fixer {self.profile_id}] ✅ All browser fixes applied successfully")
-        else:
-            print(f"[Fixer {self.profile_id}] ⚠️ Some fixes failed, but continuing")
-        
-        return all_success
-    
+        all_ok = all(results)
+        status = "✅ CDP fixes staged" if all_ok else "⚠️ Some CDP fixes failed"
+        print(f"[Fixer {self.profile_id}] {status} — refresh browser to activate")
+        return all_ok
+
     def apply_post_refresh_fixes(self):
         """
-        Apply JS-injected spoofs that must run after the browser has refreshed.
+        Apply JS-injected spoofs after the page has refreshed.
         Called automatically by refresh_browser().
         """
         results = []
         if hasattr(self, '_pending_geo'):
             lat, lon = self._pending_geo
-            results.append(self.apply_geolocation_spoof(lat, lon))
             del self._pending_geo
-        results.append(self.apply_webrtc_dns_fix())
+            results.append(self.apply_geolocation_spoof(lat, lon))
+        results.append(self.apply_webrtc_fix())
         return all(results)
 
     def refresh_browser(self):
         """
-        Refresh the browser to apply fixes, then re-inject JS-level spoofs.
-
-        Returns:
-            bool: Success
+        Refresh to activate CDP overrides, then immediately re-inject JS spoofs.
         """
         try:
-            print(f"[Fixer {self.profile_id}] 🔄 Refreshing browser...")
+            print(f"[Fixer {self.profile_id}] 🔄 Refreshing browser to activate alignment fixes...")
             self.driver.refresh()
             time.sleep(3)
-            print(f"[Fixer {self.profile_id}] ✅ Browser refreshed")
-            # Apply JS-injected spoofs now that the page is fresh
             self.apply_post_refresh_fixes()
+            print(f"[Fixer {self.profile_id}] ✅ Browser refreshed and post-refresh fixes applied")
             return True
-
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Browser refresh failed: {e}")
             return False
