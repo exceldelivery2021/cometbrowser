@@ -74,9 +74,18 @@ class AlignmentVerifier:
             return False, False, {}
     
     def _detect_browser_language(self, driver):
-        """Try to detect browser language from navigator object"""
+        """
+        Detect the language the browser is actually sending in HTTP headers.
+        Reads navigator.language (JS) which reflects Emulation.setLocaleOverride,
+        but also checks navigator.languages[0] as a cross-check.
+        The Accept-Language header (set via Network.setUserAgentOverride) is what
+        Whoer reads server-side — navigator.language should match it after our fixes.
+        """
         try:
-            lang = driver.execute_script("return navigator.language;")
+            lang = driver.execute_script(
+                "return navigator.languages && navigator.languages.length "
+                "? navigator.languages[0] : navigator.language;"
+            )
             print(f"[Verifier {self.profile_id}] 📝 Browser language: {lang}")
             return lang
         except:

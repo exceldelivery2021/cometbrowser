@@ -17,8 +17,11 @@ class BrowserAlignmentFixer:
     
     def apply_language_fix(self, language_code):
         """
-        Apply language fix via CDP Emulation.setLocaleOverride.
-        Persists across page refreshes unlike JS injection.
+        Apply language fix via CDP.
+        - Emulation.setLocaleOverride  → navigator.language (JS-visible)
+        - Network.setUserAgentOverride → Accept-Language HTTP header (server-visible)
+
+        Both must be set; Whoer reads the HTTP header server-side, not navigator.language.
 
         Args:
             language_code (str): Language code (e.g., 'en-US', 'de-DE')
@@ -27,9 +30,28 @@ class BrowserAlignmentFixer:
             bool: Success
         """
         try:
+            # Build Accept-Language header value: primary + English fallback
+            base = language_code.split('-')[0]  # e.g. 'nl' from 'nl-NL'
+            if base == 'en':
+                accept_lang = f"{language_code};q=1.0"
+            else:
+                accept_lang = f"{language_code};q=1.0,{base};q=0.9,en;q=0.8"
+
+            # Fix navigator.language (JS)
             self.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": language_code})
+
+            # Fix Accept-Language HTTP header — this is what Whoer and sites read server-side
+            try:
+                current_ua = self.driver.execute_script("return navigator.userAgent;") or ""
+                self.driver.execute_cdp_cmd("Network.setUserAgentOverride", {
+                    "userAgent": current_ua,
+                    "acceptLanguage": accept_lang,
+                })
+            except Exception as e2:
+                print(f"[Fixer {self.profile_id}] ⚠️ Accept-Language header update failed: {e2}")
+
             self.fixes_applied.append('language')
-            print(f"[Fixer {self.profile_id}] ✅ Language fix applied: {language_code}")
+            print(f"[Fixer {self.profile_id}] ✅ Language fix applied: {language_code} (Accept-Language: {accept_lang})")
             return True
 
         except Exception as e:
@@ -155,29 +177,31 @@ class BrowserAlignmentFixer:
         
         print(f"\n[Fixer {self.profile_id}] 🔧 Applying browser alignment fixes...")
         time.sleep(0.5)
-        
+
         results = []
-        
-        # Apply language fix
-        language = geo_data.get('language', 'en-US')
-        results.append(self.apply_language_fix(language))
-        time.sleep(0.3)
-        
-        # Apply timezone fix
+
+        # Timezone and language MUST be set before the next page navigation to take full effect.
+        # Apply both CDP overrides first, then refresh, then inject JS-level spoofs.
+
+        # 1. Apply timezone fix (CDP — takes effect on next navigation)
         timezone = geo_data.get('timezone', 'UTC')
         results.append(self.apply_timezone_fix(timezone))
-        time.sleep(0.3)
-        
-        # Apply geolocation spoof
-        latitude = geo_data.get('latitude', 40.7128)
-        longitude = geo_data.get('longitude', -74.0060)
-        results.append(self.apply_geolocation_spoof(latitude, longitude))
-        time.sleep(0.3)
-        
-        # Apply WebRTC DNS fix
-        results.append(self.apply_webrtc_dns_fix())
-        time.sleep(0.3)
-        
+        time.sleep(0.2)
+
+        # 2. Apply language fix (CDP — sets both navigator.language and Accept-Language header)
+        language = geo_data.get('language', 'en-US')
+        results.append(self.apply_language_fix(language))
+        time.sleep(0.2)
+
+        # NOTE: refresh_browser() is called by ghost_core after apply_all_fixes() returns.
+        # Geolocation and WebRTC spoofs are JS-injected so they must run AFTER the refresh
+        # (called via apply_post_refresh_fixes). Apply them here so ghost_core can call
+        # apply_post_refresh_fixes() after refresh_browser().
+        self._pending_geo = (
+            geo_data.get('latitude', 40.7128),
+            geo_data.get('longitude', -74.0060),
+        )
+
         all_success = all(results)
         
         if all_success:
@@ -187,10 +211,23 @@ class BrowserAlignmentFixer:
         
         return all_success
     
+    def apply_post_refresh_fixes(self):
+        """
+        Apply JS-injected spoofs that must run after the browser has refreshed.
+        Called automatically by refresh_browser().
+        """
+        results = []
+        if hasattr(self, '_pending_geo'):
+            lat, lon = self._pending_geo
+            results.append(self.apply_geolocation_spoof(lat, lon))
+            del self._pending_geo
+        results.append(self.apply_webrtc_dns_fix())
+        return all(results)
+
     def refresh_browser(self):
         """
-        Refresh the browser to apply fixes
-        
+        Refresh the browser to apply fixes, then re-inject JS-level spoofs.
+
         Returns:
             bool: Success
         """
@@ -199,8 +236,10 @@ class BrowserAlignmentFixer:
             self.driver.refresh()
             time.sleep(3)
             print(f"[Fixer {self.profile_id}] ✅ Browser refreshed")
+            # Apply JS-injected spoofs now that the page is fresh
+            self.apply_post_refresh_fixes()
             return True
-        
+
         except Exception as e:
             print(f"[Fixer {self.profile_id}] ⚠️ Browser refresh failed: {e}")
             return False
