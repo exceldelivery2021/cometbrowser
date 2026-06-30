@@ -153,40 +153,57 @@ class YouTubeRunner(BaseRunner):
             "videos_watched": videos_watched
         }
     
+    def _is_browser_alive(self):
+        """Return False if the browser window/session is gone."""
+        try:
+            _ = self.driver.current_url
+            return True
+        except Exception:
+            return False
+
     def _browse_targeted_videos(self, duration_seconds: int, behavior) -> int:
         """Browse and watch targeted channels/videos"""
         start_time = time.time()
         videos_watched = 0
-        
+
         while time.time() - start_time < duration_seconds:
             if not self.targets:
                 break
-            
+            if not self._is_browser_alive():
+                print(f"[YouTube {self.profile_id}] Browser closed — stopping targeted browse")
+                break
+
             target = random.choice(self.targets)
             print(f"[YouTube {self.profile_id}] 🎯 Navigating to target: {target}")
-            
+
             self._navigate_to_target(target)
             self._watch_video_with_behavior(behavior)
             videos_watched += 1
-            
+
+            if not self._is_browser_alive():
+                break
+
             # Engagement
             self._youtube_like_if_random(behavior)
             self._youtube_subscribe_if_random(behavior)
             self._youtube_comment_if_random(behavior)
-            
+
             # Maybe watch next
-            if random.random() < 0.5:
+            if random.random() < 0.5 and self._is_browser_alive():
                 self._watch_next_recommended(behavior)
                 videos_watched += 1
-        
+
         return videos_watched
-    
+
     def _browse_random_videos(self, duration_seconds: int, behavior) -> int:
         """Browse and watch random recommendations"""
         start_time = time.time()
         videos_watched = 0
-        
+
         while time.time() - start_time < duration_seconds:
+            if not self._is_browser_alive():
+                print(f"[YouTube {self.profile_id}] Browser closed — stopping random browse")
+                break
             # Use search pattern for variety
             if behavior.search_pattern == SearchPattern.SEARCH_BAR:
                 self._random_search()
@@ -196,10 +213,10 @@ class YouTubeRunner(BaseRunner):
                 self._navigate_random_playlist()
             else:
                 self._watch_next_recommended(behavior)
-            
+
             self._watch_video_with_behavior(behavior)
             videos_watched += 1
-        
+
         return videos_watched
     
     def _navigate_to_target(self, target):
@@ -245,6 +262,8 @@ class YouTubeRunner(BaseRunner):
             # Simulate watching with pauses/scrolling
             start_time = time.time()
             while time.time() - start_time < watch_seconds:
+                if not self._is_browser_alive():
+                    return
                 # Random pause
                 if random.random() < behavior.pause_probability:
                     pause_time = random.randint(10, 30)
@@ -252,7 +271,7 @@ class YouTubeRunner(BaseRunner):
                     time.sleep(pause_time)
                 else:
                     time.sleep(random.uniform(2, 5))
-                
+
                 # Random scroll
                 if random.random() < 0.2:
                     self._scroll_page(random.randint(1, 3))
