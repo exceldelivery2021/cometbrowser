@@ -2241,22 +2241,29 @@ class GhostCore:
                         # Apply fixes
                         fixer = BrowserAlignmentFixer(driver, pid)
                         fixer.apply_all_fixes(geo_data)
-                        
+
                         # Refresh browser to apply fixes
                         fixer.refresh_browser()
-                        
-                        time.sleep(2)
-                        
-                        # Verify alignment after fixes
+
+                        # Verify alignment — retry up to 3 times with increasing delays
+                        # to allow CDP overrides and JS injections to fully settle.
                         verifier = AlignmentVerifier(pid, self.db)
-                        lang_aligned, tz_aligned, verify_data = verifier.verify_alignment(driver, geo_data)
-                        
+                        lang_aligned, tz_aligned = False, False
+                        for attempt in range(1, 4):
+                            time.sleep(4 if attempt == 1 else 6)
+                            lang_aligned, tz_aligned, verify_data = verifier.verify_alignment(driver, geo_data)
+                            if lang_aligned and tz_aligned:
+                                break
+                            if attempt < 3:
+                                print(f"[Ghost {pid}] ⏳ Alignment attempt {attempt}/3 failed — re-applying fixes and retrying...")
+                                fixer.apply_all_fixes(geo_data)
+
                         # Check if language AND timezone are aligned
                         if lang_aligned and tz_aligned:
                             print(f"[Ghost {pid}] ✅ ALIGNMENT PASSED: Language and Timezone match IP")
                             alignment_passed = True
                         else:
-                            print(f"[Ghost {pid}] ❌ ALIGNMENT FAILED: Language={lang_aligned}, Timezone={tz_aligned}")
+                            print(f"[Ghost {pid}] ❌ ALIGNMENT FAILED after 3 attempts: Language={lang_aligned}, Timezone={tz_aligned}")
                             alignment_passed = False
                     else:
                         print(f"[Ghost {pid}] ⚠️ Could not query IP geolocation")
