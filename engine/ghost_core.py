@@ -2222,7 +2222,22 @@ class GhostCore:
                     
                     if geo_data:
                         print(f"[Ghost {pid}] 📊 IP Geolocation: {geo_data['country_name']} | TZ: {geo_data['timezone']} | Lang: {geo_data['language']}")
-                        
+
+                        # Sync cloak language to match the detected IP language so future
+                        # browser restarts also launch with the correct language.
+                        ip_language = geo_data.get('language', 'en-US')
+                        base_lang = ip_language.split('-')[0]
+                        if base_lang == 'en':
+                            lang_list = [ip_language]
+                            accept_lang = f"{ip_language};q=1.0"
+                        else:
+                            lang_list = [ip_language, base_lang, 'en-US', 'en']
+                            accept_lang = f"{ip_language};q=1.0,{base_lang};q=0.9,en-US;q=0.8,en;q=0.7"
+                        cloak['language'] = ip_language
+                        cloak['languages'] = lang_list
+                        cloak['accept_language'] = accept_lang
+                        print(f"[Ghost {pid}] 🌐 Cloak language synced to IP: {ip_language}")
+
                         # Apply fixes
                         fixer = BrowserAlignmentFixer(driver, pid)
                         fixer.apply_all_fixes(geo_data)
