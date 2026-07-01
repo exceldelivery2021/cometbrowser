@@ -5629,6 +5629,155 @@ class BackendAPI:
             "ul_speed": ul
         }
 
+    # ==================================================================
+    # WEB AGENT — page analysis & browser control
+    # Completely isolated from ghost profile threads.
+    # ==================================================================
+
+    def _get_web_agent(self):
+        """Lazy-init the web agent singleton. Never called at startup."""
+        if not hasattr(self, "_web_agent") or self._web_agent is None:
+            try:
+                from engine.web_agent import WebAgent
+                def _log(msg):
+                    try:
+                        self.window.evaluate_js(f"waLog({json.dumps(msg)});")
+                    except Exception:
+                        pass
+                self._web_agent = WebAgent(
+                    comet_path=COMET_PATH,
+                    driver_path=CHROMEDRIVER_PATH,
+                    log_callback=_log,
+                )
+            except Exception as e:
+                print(f"[WebAgent] Init failed: {e}")
+                return None
+        return self._web_agent
+
+    def wa_start_browser(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.start_browser())
+
+    def wa_stop_browser(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.stop_browser())
+
+    def wa_emergency_stop(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.emergency_stop())
+
+    def wa_navigate(self, url):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.navigate(url))
+
+    def wa_analyze_page(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.analyze_page())
+
+    def wa_take_screenshot(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.take_screenshot())
+
+    def wa_run_ocr(self, image_path=""):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.run_ocr(image_path))
+
+    def wa_suggest_action(self, task="", use_ai=True, model=""):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.suggest_action(task=task, use_ai=bool(use_ai), model=model))
+
+    def wa_execute_action(self, approved=False, action=None):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        if isinstance(action, str):
+            try:
+                import json as _json
+                action = _json.loads(action)
+            except Exception:
+                action = None
+        return json.dumps(agent.execute_action(action=action, approved=bool(approved)))
+
+    def wa_approve_pending(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.approve_pending())
+
+    def wa_start_auto_mode(self, task="", interval=5.0, model=""):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.start_auto_mode(task=task, interval=float(interval), model=model))
+
+    def wa_stop_auto_mode(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.stop_auto_mode())
+
+    def wa_pause(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.pause_auto_mode())
+
+    def wa_resume(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False, "error": "WebAgent not available"})
+        return json.dumps(agent.resume_auto_mode())
+
+    def wa_get_status(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"browser_running": False, "auto_mode": False, "paused": False})
+        return json.dumps(agent.get_status())
+
+    def wa_get_logs(self, limit=50):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps([])
+        return json.dumps(agent.get_logs(int(limit)))
+
+    def wa_clear_logs(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"ok": False})
+        return json.dumps(agent.clear_logs())
+
+    def wa_diagnostics(self):
+        agent = self._get_web_agent()
+        if not agent:
+            return json.dumps({"error": "WebAgent not available"})
+        return json.dumps(agent.diagnostics())
+
+    def wa_ollama_models(self):
+        try:
+            from engine.ollama_client import list_models, is_available
+            if not is_available():
+                return json.dumps({"ok": False, "models": []})
+            return json.dumps({"ok": True, "models": list_models()})
+        except Exception as e:
+            return json.dumps({"ok": False, "models": [], "error": str(e)})
+
+
 def resource_monitor_thread(api):
     time.sleep(2) 
     while True:

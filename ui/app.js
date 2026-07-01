@@ -55,12 +55,23 @@ function switchTab(tabName) {
         if (targetsSection) targetsSection.style.display = 'flex';
         updateTargetTypeOptions();
         refreshPlatformTargets();
+    } else if (tabName === 'web-agent') {
+        if (resourcesPanel) resourcesPanel.style.display = 'none';
+        if (sessionsSection) sessionsSection.style.display = 'none';
+        if (pcControlSection) pcControlSection.style.display = 'none';
+        if (analyticsSection) analyticsSection.style.display = 'none';
+        if (targetsSection) targetsSection.style.display = 'none';
+        const waSection = document.getElementById('web-agent-section');
+        if (waSection) waSection.style.display = 'flex';
+        waInit();
     } else {
         if (resourcesPanel) resourcesPanel.style.display = '';
         if (sessionsSection) sessionsSection.style.display = 'flex';
         if (pcControlSection) pcControlSection.style.display = 'none';
         if (analyticsSection) analyticsSection.style.display = 'none';
         if (targetsSection) targetsSection.style.display = 'none';
+        const waSection = document.getElementById('web-agent-section');
+        if (waSection) waSection.style.display = 'none';
     }
 
     console.log(`Switched to ${tabName} tab`);
@@ -12098,3 +12109,289 @@ setInterval(function () {
     window.refreshCometSectionInfoButtons = ensureSectionInfoButtons;
 })();
 // === COMET SECTION INFO HELP END ===
+
+// ================================================================
+// WEB AGENT — JavaScript controller
+// ================================================================
+
+let _waAutoOn = false;
+let _waStatusInterval = null;
+
+function waInit() {
+    waLoadModels();
+    waRefreshStatus();
+    if (!_waStatusInterval) {
+        _waStatusInterval = setInterval(waRefreshStatus, 3000);
+    }
+}
+
+function waLog(msg, type = 'info') {
+    const log = document.getElementById('wa-log');
+    if (!log) return;
+    const entry = document.createElement('div');
+    entry.className = `wa-log-entry wa-log-${type}`;
+    const ts = new Date().toLocaleTimeString();
+    entry.textContent = `[${ts}] ${msg}`;
+    log.prepend(entry);
+    // Trim log to 200 entries
+    while (log.children.length > 200) log.removeChild(log.lastChild);
+}
+
+async function waCall(method, ...args) {
+    try {
+        const raw = await window.pywebview.api[method](...args);
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (e) {
+        waLog(`API error (${method}): ${e}`, 'fail');
+        return { ok: false, error: String(e) };
+    }
+}
+
+async function waLoadModels() {
+    const sel = document.getElementById('wa-model-select');
+    if (!sel) return;
+    const res = await waCall('wa_ollama_models');
+    sel.innerHTML = '<option value="">Rule-based (no AI)</option>';
+    if (res.ok && res.models && res.models.length) {
+        res.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m; opt.textContent = m;
+            sel.appendChild(opt);
+        });
+        waLog(`Ollama models loaded: ${res.models.join(', ')}`, 'info');
+    } else {
+        waLog('Ollama not detected — using rule-based suggestions', 'info');
+    }
+}
+
+async function waRefreshStatus() {
+    const res = await waCall('wa_get_status');
+    const browserPill = document.getElementById('wa-browser-status');
+    const autoPill    = document.getElementById('wa-auto-status');
+    const urlEl       = document.getElementById('wa-current-url');
+    const titleEl     = document.getElementById('wa-page-title');
+    const autoBtn     = document.getElementById('wa-auto-btn');
+    const approvalBar = document.getElementById('wa-approval-bar');
+    const approvalMsg = document.getElementById('wa-approval-msg');
+
+    if (browserPill) {
+        if (res.browser_running) {
+            browserPill.textContent = '🟢 Browser On';
+            browserPill.style.color = 'var(--accent-green)';
+        } else {
+            browserPill.textContent = '⚫ Browser Off';
+            browserPill.style.color = 'var(--text-muted)';
+        }
+    }
+    if (autoPill) {
+        autoPill.textContent = res.auto_mode ? 'Auto: ON' : 'Auto: OFF';
+        autoPill.style.color = res.auto_mode ? 'var(--accent-green)' : 'var(--text-muted)';
+    }
+    if (autoBtn) {
+        autoBtn.textContent = res.auto_mode ? '⚡ Auto ON' : '⚡ Auto OFF';
+        _waAutoOn = res.auto_mode;
+    }
+    if (urlEl && res.current_url)   urlEl.textContent   = `URL: ${res.current_url}`;
+    if (titleEl && res.current_title) titleEl.textContent = `Title: ${res.current_title}`;
+
+    if (approvalBar && approvalMsg) {
+        if (res.pending_approval) {
+            const a = res.pending_approval;
+            approvalMsg.textContent = `Approval needed: ${a.action} "${a.target_text}" (${a.safety_level})`;
+            approvalBar.style.display = 'flex';
+        } else {
+            approvalBar.style.display = 'none';
+        }
+    }
+}
+
+async function waStartBrowser() {
+    waLog('Starting browser…', 'info');
+    const res = await waCall('wa_start_browser');
+    waLog(res.ok ? `Browser started on port ${res.port}` : `Failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    waRefreshStatus();
+}
+
+async function waStopBrowser() {
+    const res = await waCall('wa_stop_browser');
+    waLog(res.ok ? 'Browser stopped' : `Stop failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    waRefreshStatus();
+}
+
+async function waEmergencyStop() {
+    const res = await waCall('wa_emergency_stop');
+    waLog('🛑 EMERGENCY STOP', 'fail');
+    waRefreshStatus();
+}
+
+async function waNavigate() {
+    const url = document.getElementById('wa-url-input')?.value?.trim();
+    if (!url) return waLog('Enter a URL first', 'fail');
+    waLog(`Navigating to ${url}…`, 'info');
+    const res = await waCall('wa_navigate', url);
+    waLog(res.ok ? `Navigated: ${res.title}` : `Failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    if (res.ok) waRefreshStatus();
+}
+
+async function waAnalyzePage() {
+    waLog('Analyzing page…', 'info');
+    const res = await waCall('wa_analyze_page');
+    if (!res.ok) return waLog(`Analysis failed: ${res.error}`, 'fail');
+    const data = res.data;
+    waLog(`Analyzed: ${data.title} | ${data.buttons?.length||0} buttons, ${data.links?.length||0} links, ${data.inputs?.length||0} inputs`, 'ok');
+    waRenderElements(data);
+    if (data.screenshot) waShowScreenshot(data.screenshot);
+    waRefreshStatus();
+}
+
+function waRenderElements(data) {
+    const container = document.getElementById('wa-elements');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const groups = [
+        { label: `Buttons (${(data.buttons||[]).length})`,    items: (data.buttons||[]).map(b => b.text || b.aria_label || '—') },
+        { label: `Links (${(data.links||[]).length})`,        items: (data.links||[]).map(l => l.text || l.href || '—') },
+        { label: `Inputs (${(data.inputs||[]).length})`,      items: (data.inputs||[]).map(i => i.placeholder || i.name || i.type || '—') },
+        { label: `Dropdowns (${(data.selects||[]).length})`,  items: (data.selects||[]).map(s => s.name || '(dropdown)') },
+        { label: `Checkboxes (${(data.checkboxes||[]).length})`, items: (data.checkboxes||[]).map(c => `[${c.checked?'✓':' '}] ${c.name||c.type}`) },
+        { label: `Forms (${(data.forms||[]).length})`,        items: (data.forms||[]).map(f => f.action || f.id || '(form)') },
+        { label: `Text (${(data.text_blocks||[]).length})`,   items: (data.text_blocks||[]).map(t => `<${t.tag}> ${t.text}`) },
+        { label: `ARIA (${(data.aria_roles||[]).length})`,    items: (data.aria_roles||[]).map(a => `[${a.role}] ${a.text}`) },
+    ];
+
+    groups.forEach(g => {
+        if (!g.items.length) return;
+        const grp = document.createElement('div'); grp.className = 'wa-el-group';
+        const lbl = document.createElement('div'); lbl.className = 'wa-el-label'; lbl.textContent = g.label;
+        grp.appendChild(lbl);
+        g.items.slice(0, 20).forEach(text => {
+            const item = document.createElement('div'); item.className = 'wa-el-item';
+            item.textContent = text; item.title = text;
+            grp.appendChild(item);
+        });
+        container.appendChild(grp);
+    });
+}
+
+function waShowScreenshot(path) {
+    const box = document.getElementById('wa-screenshot-box');
+    if (!box) return;
+    box.innerHTML = `<img src="file:///${path.replace(/\\/g,'/')}" onerror="this.alt='Screenshot not available'" alt="screenshot" />`;
+}
+
+async function waSuggestAction() {
+    const task  = document.getElementById('wa-task-input')?.value?.trim() || '';
+    const model = document.getElementById('wa-model-select')?.value || '';
+    waLog(`Suggesting action for: "${task || 'navigate the page'}"…`, 'info');
+    const res = await waCall('wa_suggest_action', task, !!model, model);
+    if (!res.ok) return waLog(`Suggest failed: ${res.error}`, 'fail');
+    const s = res.suggestion;
+    waRenderSuggestion(s);
+    waLog(`Suggestion: ${s.action} "${s.target_text}" (${Math.round((s.confidence||0)*100)}% confidence, ${s.safety_level})`, 'ok');
+}
+
+function waRenderSuggestion(s) {
+    const box = document.getElementById('wa-suggestion-box');
+    if (!box || !s) return;
+    const safetyClass = s.safety_level === 'safe' ? 'wa-safe' : s.safety_level === 'dangerous' ? 'wa-dangerous' : 'wa-caution';
+    const confIcon = s.confidence >= 0.7 ? '🟢' : s.confidence >= 0.4 ? '🟡' : '🔴';
+
+    box.innerHTML = `
+        <div class="wa-sug-action">${s.action?.toUpperCase() || '?'} → "${s.target_text || s.selector || '—'}"</div>
+        <div class="wa-sug-reason">${s.reason || ''}</div>
+        <div class="wa-sug-safety">
+            <span class="${safetyClass}">⚑ ${s.safety_level || '—'}</span>
+            &nbsp;|&nbsp; ${confIcon} ${Math.round((s.confidence||0)*100)}% confidence
+            &nbsp;|&nbsp; Source: ${s.source || 'rule'}
+            ${s.requires_approval ? '&nbsp;|&nbsp; <span class="wa-caution">⚠ Needs approval</span>' : ''}
+        </div>
+    `;
+
+    const safetyPill = document.getElementById('wa-safety-status');
+    const confEl     = document.getElementById('wa-confidence');
+    if (safetyPill) { safetyPill.textContent = `Safety: ${s.safety_level}`; safetyPill.className = `wa-status-pill ${safetyClass}`; }
+    if (confEl)     confEl.textContent = `Confidence: ${Math.round((s.confidence||0)*100)}%`;
+}
+
+async function waExecuteAction() {
+    waLog('Executing suggested action…', 'info');
+    const res = await waCall('wa_execute_action', false, null);
+    if (res.result?.error === 'APPROVAL_REQUIRED') {
+        waLog('Action requires approval — click Approve to proceed', 'fail');
+        document.getElementById('wa-approval-bar').style.display = 'flex';
+        document.getElementById('wa-approval-msg').textContent = 'This action requires your approval before executing.';
+        return;
+    }
+    waLog(res.ok ? `Done: ${res.result?.message}` : `Failed: ${res.result?.error || res.error}`, res.ok ? 'ok' : 'fail');
+    if (res.result?.screenshot_after) waShowScreenshot(res.result.screenshot_after);
+}
+
+async function waApprovePending() {
+    waLog('Approving pending action…', 'info');
+    const res = await waCall('wa_approve_pending');
+    waLog(res.ok ? `Approved & executed: ${res.result?.message}` : `Failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    document.getElementById('wa-approval-bar').style.display = 'none';
+    if (res.result?.screenshot_after) waShowScreenshot(res.result.screenshot_after);
+}
+
+async function waToggleAuto() {
+    if (_waAutoOn) {
+        const res = await waCall('wa_stop_auto_mode');
+        waLog('Auto mode stopped', 'info');
+    } else {
+        const task  = document.getElementById('wa-task-input')?.value?.trim() || '';
+        const model = document.getElementById('wa-model-select')?.value || '';
+        const res = await waCall('wa_start_auto_mode', task, 5.0, model);
+        waLog(res.ok ? 'Auto mode started' : `Failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    }
+    waRefreshStatus();
+}
+
+async function waPause()  { const r = await waCall('wa_pause');  waLog('Paused', 'info'); }
+async function waResume() { const r = await waCall('wa_resume'); waLog('Resumed', 'info'); document.getElementById('wa-approval-bar').style.display = 'none'; }
+
+async function waScreenshot() {
+    const res = await waCall('wa_take_screenshot');
+    waLog(res.ok ? `Screenshot saved: ${res.path}` : `Failed: ${res.error}`, res.ok ? 'ok' : 'fail');
+    if (res.ok) waShowScreenshot(res.path);
+}
+
+async function waRunOCR() {
+    waLog('Running OCR on current screenshot…', 'info');
+    const res = await waCall('wa_run_ocr', '');
+    const el = document.getElementById('wa-ocr');
+    if (res.ok) {
+        waLog(`OCR complete — ${res.text?.length||0} chars extracted`, 'ok');
+        if (el) el.textContent = res.text || '(no text found)';
+    } else {
+        waLog(`OCR: ${res.error}`, 'fail');
+        if (el) el.textContent = res.error;
+    }
+}
+
+async function waDiagnostics() {
+    waLog('Running diagnostics…', 'info');
+    const res = await waCall('wa_diagnostics');
+    const container = document.getElementById('wa-elements');
+    if (!container) return;
+    container.innerHTML = '<div class="wa-el-label">Diagnostics</div>';
+    Object.entries(res).forEach(([key, val]) => {
+        const item = document.createElement('div');
+        item.className = `wa-diag-item ${val.ok ? 'wa-diag-ok' : 'wa-diag-fail'}`;
+        item.textContent = `${val.ok ? '✅' : '❌'} ${key}: ${val.error || val.version || val.path || (val.ok ? 'OK' : 'FAIL')}`;
+        if (val.models) item.textContent += ` [${val.models.join(', ')}]`;
+        container.appendChild(item);
+    });
+}
+
+async function waClearLogs() {
+    if (!confirm('Clear all Web Agent logs?')) return;
+    const res = await waCall('wa_clear_logs');
+    waLog('Logs cleared', 'info');
+    document.getElementById('wa-log').innerHTML = '';
+}
+
+// ================================================================
+// WEB AGENT END
+// ================================================================

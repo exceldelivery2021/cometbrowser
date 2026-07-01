@@ -6319,3 +6319,95 @@ textarea {
     }
 }
 /* === COMET REALISTIC 3D / LIQUID GLASS UI END === */
+
+/* ================================================================
+   WEB AGENT PANEL
+================================================================ */
+.wa-layout { display:flex; flex-direction:column; height:100%; gap:8px; padding:10px; }
+.wa-toolbar { display:flex; flex-direction:column; gap:6px; background:var(--bg-panel); border-radius:8px; padding:10px; }
+.wa-url-bar, .wa-task-bar { display:flex; gap:6px; }
+.wa-url-bar input, .wa-task-bar input {
+    flex:1; background:#1a1d24; border:1px solid #333; border-radius:6px;
+    color:var(--text-main); padding:6px 10px; font-size:13px;
+}
+.wa-url-bar input:focus, .wa-task-bar input:focus { outline:none; border-color:var(--accent-blue); }
+.wa-select {
+    background:#1a1d24; border:1px solid #333; border-radius:6px;
+    color:var(--text-main); padding:6px 8px; font-size:12px;
+}
+.wa-controls { display:flex; flex-wrap:wrap; gap:5px; }
+.wa-btn { font-size:11px; padding:5px 10px; border-radius:5px; cursor:pointer; border:none; }
+.wa-btn-blue   { background:#0a3d5c; color:var(--accent-blue);  }
+.wa-btn-green  { background:#0a3d1a; color:var(--accent-green); }
+.wa-btn-orange { background:#3d2200; color:#ff9900;             }
+.wa-btn-red    { background:#3d0a0a; color:var(--accent-red);   }
+
+.wa-status-bar {
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    background:var(--bg-panel); border-radius:6px; padding:6px 12px;
+}
+.wa-status-pill {
+    font-size:11px; padding:2px 8px; border-radius:10px;
+    background:#1a1d24; color:var(--text-muted); border:1px solid #333;
+}
+.wa-status-text { font-size:11px; color:var(--text-muted); }
+
+.wa-main { display:flex; flex:1; gap:8px; overflow:hidden; min-height:0; }
+.wa-panel {
+    background:var(--bg-panel); border-radius:8px; padding:10px;
+    display:flex; flex-direction:column; overflow:hidden;
+}
+.wa-panel-left  { width:240px; flex-shrink:0; }
+.wa-panel-center{ flex:1; }
+.wa-panel-right { width:280px; flex-shrink:0; }
+.wa-panel-title { font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+
+.wa-elements, .wa-log, .wa-ocr {
+    flex:1; overflow-y:auto; font-size:11px; color:var(--text-main);
+}
+.wa-empty { color:var(--text-muted); font-style:italic; font-size:11px; }
+
+.wa-el-group { margin-bottom:10px; }
+.wa-el-label { color:var(--accent-blue); font-size:10px; text-transform:uppercase; margin-bottom:3px; }
+.wa-el-item {
+    background:#1a1d24; border-radius:4px; padding:4px 7px; margin-bottom:2px;
+    border-left:2px solid #333; cursor:pointer; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+}
+.wa-el-item:hover { border-left-color:var(--accent-blue); }
+
+.wa-screenshot-box {
+    flex:1; background:#111; border-radius:6px; overflow:hidden;
+    display:flex; align-items:center; justify-content:center; min-height:180px;
+    max-height:300px;
+}
+.wa-screenshot-box img { max-width:100%; max-height:100%; object-fit:contain; }
+
+.wa-suggestion-box {
+    background:#0d1a2b; border:1px solid #1a3a5c; border-radius:6px;
+    padding:10px; margin-top:8px; font-size:12px;
+}
+.wa-sug-action  { color:var(--accent-blue); font-weight:bold; font-size:13px; }
+.wa-sug-reason  { color:var(--text-muted);  margin-top:3px; }
+.wa-sug-safety  { margin-top:4px; }
+.wa-safe        { color:var(--accent-green); }
+.wa-caution     { color:#ff9900; }
+.wa-dangerous   { color:var(--accent-red); }
+
+.wa-approval-bar {
+    background:#2d1a00; border:1px solid #ff9900; border-radius:6px;
+    padding:8px; margin-top:6px; display:flex; align-items:center; gap:8px;
+    font-size:12px; color:#ff9900;
+}
+
+.wa-log-entry {
+    padding:3px 6px; margin-bottom:2px; border-radius:3px;
+    background:#1a1d24; border-left:2px solid #333; word-break:break-word;
+}
+.wa-log-ok      { border-left-color:var(--accent-green); }
+.wa-log-fail    { border-left-color:var(--accent-red);   }
+.wa-log-info    { border-left-color:var(--accent-blue);  }
+
+.wa-diag-item   { padding:3px 6px; margin:2px 0; border-radius:3px; background:#1a1d24; font-size:11px; }
+.wa-diag-ok     { color:var(--accent-green); }
+.wa-diag-fail   { color:var(--accent-red);   }
