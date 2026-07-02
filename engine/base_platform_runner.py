@@ -21,9 +21,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from engine.ip_quality_tracker import get_tracker
 
-# Default session length when ghost_core doesn't provide runtime_seconds
-_SESSION_MIN_S = 10 * 60   # 10 min
-_SESSION_MAX_S = 30 * 60   # 30 min
+# Session length for validated profiles — random between 30 min and 4 hours
+_SESSION_MIN_S = 30 * 60        # 30 minutes
+_SESSION_MAX_S = 4 * 60 * 60    # 4 hours
 
 # Dwell time per content piece (seconds)
 _DWELL_TARGETED_MIN = 90
