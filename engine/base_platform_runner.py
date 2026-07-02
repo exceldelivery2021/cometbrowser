@@ -1,7 +1,14 @@
 """
-BasePlatformRunner - Richer base class for platform runners.
-Handles target selection, page-load verification, event recording,
-and IP quality tracking (bans IPs that platforms don't show ads to).
+BasePlatformRunner - Full behavioral session orchestrator for platform runners.
+
+Session contract:
+  - 60-90% of session time on targeted content (random split per session)
+  - Remaining 10-40% on random/discovery content
+  - Order (targeted-first vs random-first) is randomly decided per session
+  - Likes / follows applied 5-15% of the time per content visit
+  - Comments applied 3-8% of the time per content visit
+  - Ads are NEVER skipped or dismissed — presence/absence is observed
+    only for IP quality scoring
 """
 
 import random
@@ -14,194 +21,363 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from engine.ip_quality_tracker import get_tracker
 
+# Default session length when ghost_core doesn't provide runtime_seconds
+_SESSION_MIN_S = 10 * 60   # 10 min
+_SESSION_MAX_S = 30 * 60   # 30 min
+
+# Dwell time per content piece (seconds)
+_DWELL_TARGETED_MIN = 90
+_DWELL_TARGETED_MAX = 300   # up to 5 min per targeted item
+_DWELL_RANDOM_MIN   = 45
+_DWELL_RANDOM_MAX   = 180   # up to 3 min per random item
+
+# Idle micro-pause inside dwell (look-away simulation)
+_PAUSE_CHANCE  = 0.12       # 12% chance per tick
+_PAUSE_MIN_S   = 8
+_PAUSE_MAX_S   = 40
+_TICK_S        = 5          # polling interval during dwell
+
 
 class BasePlatformRunner:
     """
-    Shared platform runner foundation.
+    Full behavioral session orchestrator.
 
-    Key contract:
-    - Opens platform targets and verifies page load.
-    - Records timeline events to the analytics DB.
-    - Reports ad-detection results to IPQualityTracker after every session.
-    - Does NOT manually skip or dismiss ads — ad presence/absence is
-      used only for IP quality scoring.
+    Subclasses must implement:
+        build_target_url(target)         → str
+        inspect_platform_state(...)      → dict with ads_detected / page_type
+        _open_targeted(driver, target)   → bool (True = page opened ok)
+        _open_random(driver)             → bool
+        _try_like(driver)                → bool (True = action was taken)
+        _try_follow(driver)              → bool
+        _try_comment(driver)             → bool
+
+    Optional overrides:
+        _dwell_extra(driver, seconds)    → add platform-specific activity during dwell
+        platform_display_name()          → str
     """
 
     platform     = "base"
     homepage_url = "about:blank"
 
     def __init__(self, db=None, state_updater=None, default_wait=25):
-        self.db           = db
+        self.db            = db
         self.state_updater = state_updater
-        self.default_wait = default_wait
+        self.default_wait  = default_wait
 
-    # ==============================
-    # Public API
-    # ==============================
+    # ══════════════════════════════════════════════════════════════════
+    # Public entry point
+    # ══════════════════════════════════════════════════════════════════
 
     def run(self, driver, profile_id, session_id="", targets=None,
             runtime_seconds=None, ip_address=None):
+
         started_at = time.time()
-        targets = targets or []
+        targets    = targets or []
 
-        self.record_event(
-            profile_id=profile_id,
-            session_id=session_id,
-            event_type="PLATFORM_RUNNER_STARTED",
-            details=f"{self.platform} runner started"
+        self.record_event(profile_id, session_id, "PLATFORM_RUNNER_STARTED",
+                          f"{self.platform} runner started")
+        self.update_state(profile_id, status="PLATFORM_RUNNING",
+                          target_platform=self.platform_display_name())
+
+        # ── Per-session randomised parameters ────────────────────────
+        session_secs   = runtime_seconds or random.randint(_SESSION_MIN_S, _SESSION_MAX_S)
+        targeted_pct   = random.uniform(0.60, 0.90)
+        targeted_secs  = session_secs * targeted_pct
+        random_secs    = session_secs * (1.0 - targeted_pct)
+        targeted_first = random.random() < 0.5
+
+        # Per-session engagement thresholds (re-randomised every run)
+        self._like_chance    = random.uniform(0.05, 0.15)
+        self._follow_chance  = random.uniform(0.05, 0.15)
+        self._comment_chance = random.uniform(0.03, 0.08)
+
+        pct_label = f"{int(targeted_pct * 100)}% targeted / {int((1 - targeted_pct) * 100)}% random"
+        order_label = "targeted→random" if targeted_first else "random→targeted"
+        print(
+            f"[{self.platform.upper()} {profile_id}] "
+            f"Session {int(session_secs/60)}m | {pct_label} | order={order_label} | "
+            f"like={int(self._like_chance*100)}% follow={int(self._follow_chance*100)}% "
+            f"comment={int(self._comment_chance*100)}%"
         )
-
-        self.update_state(
-            profile_id,
-            status="PLATFORM_RUNNING",
-            target_platform=self.platform_display_name()
-        )
-
-        selected_target = self.choose_target(targets)
-        target_url      = self.build_target_url(selected_target)
-
-        if not target_url:
-            target_url = self.homepage_url
+        self.record_event(profile_id, session_id, "SESSION_PLAN",
+                          f"secs={session_secs}; {pct_label}; order={order_label}")
 
         result = {
             "ok":               False,
             "platform":         self.platform,
-            "target":           selected_target,
-            "target_url":       target_url,
-            "final_url":        "",
-            "title":            "",
             "events":           [],
             "error":            "",
             "started_at":       datetime.now().isoformat(timespec="seconds"),
             "ended_at":         None,
             "duration_seconds": 0,
             "ip_address":       ip_address or "",
+            "items_visited":    0,
+            "likes":            0,
+            "follows":          0,
+            "comments":         0,
         }
 
+        # Accumulate ad-detection results across all visits
+        all_ads_detected = []
+
         try:
-            self.record_event(
-                profile_id=profile_id,
-                session_id=session_id,
-                event_type="TARGET_SELECTED",
-                details=self.describe_target(selected_target, target_url)
-            )
+            if targeted_first:
+                self._run_targeted_loop(driver, profile_id, session_id,
+                                        targets, targeted_secs, result, all_ads_detected)
+                self._run_random_loop(driver, profile_id, session_id,
+                                      random_secs, result, all_ads_detected)
+            else:
+                self._run_random_loop(driver, profile_id, session_id,
+                                      random_secs, result, all_ads_detected)
+                self._run_targeted_loop(driver, profile_id, session_id,
+                                        targets, targeted_secs, result, all_ads_detected)
 
-            print(f"[{self.platform.upper()} Runner] Profile {profile_id} opening: {target_url}")
-
-            driver.get(target_url)
-
-            loaded    = self.wait_for_page_ready(driver, timeout=self.default_wait)
-            final_url = self.safe_current_url(driver)
-            title     = self.safe_title(driver)
-
-            result["final_url"] = final_url
-            result["title"]     = title
-
-            event_name = "PAGE_LOADED" if loaded else "PAGE_LOAD_TIMEOUT"
-            self.record_event(
-                profile_id=profile_id,
-                session_id=session_id,
-                event_type=event_name,
-                details=f"title={title}; url={final_url}"
-            )
-            result["events"].append(event_name)
-
-            platform_result = self.inspect_platform_state(
-                driver=driver,
-                profile_id=profile_id,
-                session_id=session_id,
-                selected_target=selected_target
-            )
-
-            result["events"].extend(platform_result.get("events", []))
-            result["ok"] = bool(platform_result.get("ok", loaded))
-
-            # ── IP quality tracking ────────────────────────────────────
-            if ip_address:
-                ads_detected = platform_result.get("ads_detected", None)
-                if ads_detected is not None:
-                    tracker = get_tracker()
-                    tracker.record_session(
-                        ip          = ip_address,
-                        platform    = self.platform,
-                        ads_detected= bool(ads_detected),
-                        session_id  = session_id or "",
-                        page_type   = platform_result.get("page_type", ""),
-                        note        = f"profile={profile_id}"
-                    )
-                    if not ads_detected:
-                        result["events"].append("IP_NO_ADS_DETECTED")
-                    if tracker.is_banned(ip_address, self.platform):
-                        result["events"].append("IP_BANNED_ON_PLATFORM")
-                        result["ip_banned"] = True
-            # ─────────────────────────────────────────────────────────
-
-            self.record_event(
-                profile_id=profile_id,
-                session_id=session_id,
-                event_type="PLATFORM_RUNNER_FINISHED",
-                details=f"ok={result['ok']}; title={title}; url={final_url}"
-            )
+            result["ok"] = True
+            self.record_event(profile_id, session_id, "PLATFORM_RUNNER_FINISHED",
+                              f"visited={result['items_visited']}; "
+                              f"likes={result['likes']}; follows={result['follows']}; "
+                              f"comments={result['comments']}")
 
         except Exception as e:
             result["ok"]    = False
             result["error"] = str(e)
-
             print(f"[{self.platform.upper()} Runner] ❌ Error for Profile {profile_id}: {e}")
             traceback.print_exc()
-
-            self.record_event(
-                profile_id=profile_id,
-                session_id=session_id,
-                event_type="PLATFORM_RUNNER_ERROR",
-                details=str(e)
-            )
+            self.record_event(profile_id, session_id, "PLATFORM_RUNNER_ERROR", str(e))
 
         finally:
             result["ended_at"]         = datetime.now().isoformat(timespec="seconds")
             result["duration_seconds"] = int(time.time() - started_at)
 
+        # ── IP quality tracking (aggregate over all visits) ───────────
+        if ip_address and all_ads_detected:
+            ads_seen = any(all_ads_detected)
+            tracker  = get_tracker()
+            tracker.record_session(
+                ip=ip_address, platform=self.platform,
+                ads_detected=ads_seen,
+                session_id=session_id or "",
+                note=f"profile={profile_id}; visits={len(all_ads_detected)}"
+            )
+            if not ads_seen:
+                result["events"].append("IP_NO_ADS_DETECTED")
+            if tracker.is_banned(ip_address, self.platform):
+                result["events"].append("IP_BANNED_ON_PLATFORM")
+                result["ip_banned"] = True
+
         return result
 
-    # ==============================
-    # Target selection
-    # ==============================
+    # ══════════════════════════════════════════════════════════════════
+    # Browse loops
+    # ══════════════════════════════════════════════════════════════════
+
+    def _run_targeted_loop(self, driver, profile_id, session_id,
+                           targets, duration_secs, result, ads_log):
+        if not targets or duration_secs <= 0:
+            return
+
+        deadline = time.time() + duration_secs
+        print(f"[{self.platform.upper()} {profile_id}] ▶ Targeted phase: {int(duration_secs)}s")
+
+        while time.time() < deadline:
+            if not self._browser_alive(driver):
+                break
+
+            target = self.choose_target(targets)
+            if not target:
+                break
+
+            url   = self.build_target_url(target)
+            label = target.get("title") or target.get("identifier") or url
+            print(f"[{self.platform.upper()} {profile_id}] 🎯 Targeted: {label}")
+            self.record_event(profile_id, session_id, "TARGETED_CONTENT_OPEN",
+                              f"url={url}; label={label}")
+
+            opened = self._open_targeted(driver, target)
+            if not opened:
+                continue
+
+            # Inspect page (ad detection)
+            state = self.inspect_platform_state(driver, profile_id, session_id, target)
+            result["events"].extend(state.get("events", []))
+            if state.get("ads_detected") is not None:
+                ads_log.append(state["ads_detected"])
+
+            # Dwell
+            dwell = min(
+                random.randint(_DWELL_TARGETED_MIN, _DWELL_TARGETED_MAX),
+                max(10, int(deadline - time.time()))
+            )
+            self._dwell(driver, dwell)
+            result["items_visited"] += 1
+
+            # Engagement
+            self._maybe_engage(driver, profile_id, result)
+
+            if not self._browser_alive(driver):
+                break
+
+    def _run_random_loop(self, driver, profile_id, session_id,
+                         duration_secs, result, ads_log):
+        if duration_secs <= 0:
+            return
+
+        deadline = time.time() + duration_secs
+        print(f"[{self.platform.upper()} {profile_id}] 🔀 Random phase: {int(duration_secs)}s")
+
+        while time.time() < deadline:
+            if not self._browser_alive(driver):
+                break
+
+            opened = self._open_random(driver)
+            if not opened:
+                time.sleep(3)
+                continue
+
+            # Inspect page
+            state = self.inspect_platform_state(driver, profile_id, session_id, None)
+            result["events"].extend(state.get("events", []))
+            if state.get("ads_detected") is not None:
+                ads_log.append(state["ads_detected"])
+
+            dwell = min(
+                random.randint(_DWELL_RANDOM_MIN, _DWELL_RANDOM_MAX),
+                max(10, int(deadline - time.time()))
+            )
+            self._dwell(driver, dwell)
+            result["items_visited"] += 1
+
+            self._maybe_engage(driver, profile_id, result)
+
+            if not self._browser_alive(driver):
+                break
+
+    # ══════════════════════════════════════════════════════════════════
+    # Engagement
+    # ══════════════════════════════════════════════════════════════════
+
+    def _maybe_engage(self, driver, profile_id, result):
+        """Apply like, follow, comment each at their per-session chance."""
+        p = self.platform.upper()
+
+        if random.random() < self._like_chance:
+            if self._try_like(driver):
+                result["likes"] += 1
+                print(f"[{p} {profile_id}] ❤️  Like applied")
+
+        if random.random() < self._follow_chance:
+            if self._try_follow(driver):
+                result["follows"] += 1
+                print(f"[{p} {profile_id}] ➕ Follow applied")
+
+        if random.random() < self._comment_chance:
+            if self._try_comment(driver):
+                result["comments"] += 1
+                print(f"[{p} {profile_id}] 💬 Comment posted")
+
+    # ══════════════════════════════════════════════════════════════════
+    # Dwell (watching / listening)
+    # ══════════════════════════════════════════════════════════════════
+
+    def _dwell(self, driver, seconds):
+        """Sit on a page for `seconds` with realistic micro-pauses and scrolls."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not self._browser_alive(driver):
+                return
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+
+            if random.random() < _PAUSE_CHANCE:
+                pause = random.randint(_PAUSE_MIN_S, min(_PAUSE_MAX_S, int(remaining)))
+                time.sleep(pause)
+            else:
+                if random.random() < 0.20:
+                    try:
+                        driver.execute_script(
+                            "window.scrollBy(0, window.innerHeight * "
+                            f"{random.uniform(0.3, 0.7):.2f});"
+                        )
+                    except Exception:
+                        pass
+                time.sleep(min(_TICK_S, remaining))
+
+            self._dwell_extra(driver, _TICK_S)
+
+    # ══════════════════════════════════════════════════════════════════
+    # Overridable stubs — subclasses implement these
+    # ══════════════════════════════════════════════════════════════════
+
+    def _open_targeted(self, driver, target) -> bool:
+        """Navigate to a specific target. Return True on success."""
+        try:
+            url = self.build_target_url(target)
+            driver.get(url)
+            self.wait_for_page_ready(driver)
+            return True
+        except Exception:
+            return False
+
+    def _open_random(self, driver) -> bool:
+        """Navigate to random/discovery content. Override in subclass."""
+        return False
+
+    def _try_like(self, driver) -> bool:
+        """Attempt a like/heart action. Override in subclass."""
+        return False
+
+    def _try_follow(self, driver) -> bool:
+        """Attempt a follow/subscribe action. Override in subclass."""
+        return False
+
+    def _try_comment(self, driver) -> bool:
+        """Attempt posting a comment. Override in subclass."""
+        return False
+
+    def _dwell_extra(self, driver, tick_seconds):
+        """Hook for platform-specific activity during dwell (e.g. chat scroll)."""
+        pass
+
+    # ══════════════════════════════════════════════════════════════════
+    # Target selection (priority-weighted)
+    # ══════════════════════════════════════════════════════════════════
 
     def choose_target(self, targets):
-        """Weighted target selection by dashboard priority (1–10)."""
-        clean_targets = []
+        clean = []
         for item in targets or []:
             if not isinstance(item, dict):
                 continue
             enabled = item.get("enabled", 1)
             if str(enabled).strip().lower() in ["0", "false", "no", "off", "disabled"]:
                 continue
-            clean_targets.append(item)
+            clean.append(item)
 
-        if not clean_targets:
+        if not clean:
             return None
 
         weighted = []
-        for item in clean_targets:
+        for item in clean:
             try:
-                priority = int(item.get("priority", 5))
+                p = max(1, min(int(item.get("priority", 5)), 10))
             except Exception:
-                priority = 5
-            priority = max(1, min(priority, 10))
-            weighted.append((item, priority))
+                p = 5
+            weighted.append((item, p))
 
         total = sum(w for _, w in weighted)
         pick  = random.uniform(0, total)
         upto  = 0
-        for item, weight in weighted:
-            upto += weight
+        for item, w in weighted:
+            upto += w
             if pick <= upto:
                 return item
-
         return weighted[-1][0]
 
+    # ══════════════════════════════════════════════════════════════════
+    # URL helpers — override build_target_url in subclass
+    # ══════════════════════════════════════════════════════════════════
+
     def build_target_url(self, target):
-        """Override in subclass for platform-specific URL construction."""
         if target and target.get("url"):
             return str(target["url"]).strip()
         return self.homepage_url
@@ -213,21 +389,29 @@ class BasePlatformRunner:
             f"platform={target.get('platform', self.platform)}; "
             f"type={target.get('target_type', '')}; "
             f"title={target.get('title', '')}; "
-            f"identifier={target.get('identifier', '')}; "
             f"url={target_url}"
         )
 
-    # ==============================
-    # Browser helpers
-    # ==============================
+    def quote(self, value):
+        return urllib.parse.quote(str(value or "").strip(), safe="")
 
-    def wait_for_page_ready(self, driver, timeout=25):
+    def clean_identifier_or_title(self, target):
+        if not target:
+            return ""
+        return (str(target.get("identifier") or "").strip()
+                or str(target.get("title") or "").strip())
+
+    # ══════════════════════════════════════════════════════════════════
+    # Browser helpers
+    # ══════════════════════════════════════════════════════════════════
+
+    def wait_for_page_ready(self, driver, timeout=None):
         try:
-            WebDriverWait(driver, timeout).until(
+            WebDriverWait(driver, timeout or self.default_wait).until(
                 lambda d: d.execute_script("return document.readyState")
                 in ["interactive", "complete"]
             )
-            time.sleep(2)
+            time.sleep(random.uniform(1.5, 3.0))
             return True
         except Exception:
             return False
@@ -244,32 +428,25 @@ class BasePlatformRunner:
         except Exception:
             return ""
 
-    def quote(self, value):
-        return urllib.parse.quote(str(value or "").strip(), safe="")
+    def _browser_alive(self, driver):
+        try:
+            _ = driver.current_url
+            return True
+        except Exception:
+            return False
 
-    def clean_identifier_or_title(self, target):
-        if not target:
-            return ""
-        identifier = str(target.get("identifier") or "").strip()
-        title      = str(target.get("title") or "").strip()
-        return identifier or title
-
-    # ==============================
-    # Event / state helpers
-    # ==============================
+    # ══════════════════════════════════════════════════════════════════
+    # Analytics / state helpers
+    # ══════════════════════════════════════════════════════════════════
 
     def update_state(self, profile_id, status=None, ip_address=None, target_platform=None):
         if not self.state_updater:
             return
         try:
-            self.state_updater(
-                profile_id,
-                status=status,
-                ip_address=ip_address,
-                target_platform=target_platform
-            )
-        except Exception as e:
-            print(f"[{self.platform.upper()} Runner] State update failed: {e}")
+            self.state_updater(profile_id, status=status,
+                               ip_address=ip_address, target_platform=target_platform)
+        except Exception:
+            pass
 
     def record_event(self, profile_id=None, session_id="", event_type="EVENT",
                      details="", event_value=0.0, duration_seconds=0):
@@ -277,31 +454,20 @@ class BasePlatformRunner:
             return
         try:
             self.db.record_analytics_event(
-                profile_id=profile_id,
-                session_id=session_id,
-                platform=self.platform,
-                event_type=event_type,
-                event_value=event_value,
-                duration_seconds=duration_seconds,
+                profile_id=profile_id, session_id=session_id,
+                platform=self.platform, event_type=event_type,
+                event_value=event_value, duration_seconds=duration_seconds,
                 details=details
             )
-        except Exception as e:
-            print(f"[{self.platform.upper()} Runner] Analytics event failed: {e}")
+        except Exception:
+            pass
 
     def platform_display_name(self):
         return self.platform.capitalize()
 
     def inspect_platform_state(self, driver, profile_id, session_id="", selected_target=None):
         """
-        Override in subclass. Must return a dict with at minimum:
-            ok           (bool)
-            events       (list of str)
-            ads_detected (bool | None)  ← None = unknown/not applicable
-            page_type    (str)
+        Override in subclass to detect page type and ad presence.
+        Must return: {ok, events, ads_detected (bool|None), page_type (str)}
         """
-        return {
-            "ok":           True,
-            "events":       ["BASE_PLATFORM_INSPECTED"],
-            "ads_detected": None,
-            "page_type":    "unknown",
-        }
+        return {"ok": True, "events": [], "ads_detected": None, "page_type": "unknown"}
