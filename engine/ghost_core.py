@@ -514,7 +514,7 @@ class GhostCore:
                 "error": str(e)
             }
 
-    def _run_platform_runner(self, driver, pid, target, session_id=""):
+    def _run_platform_runner(self, driver, pid, target, session_id="", ip_address=""):
         """
         Runs the correct independent platform module with FULL DEBUG LOGGING
         """
@@ -568,7 +568,8 @@ class GhostCore:
                 driver=driver,
                 profile_id=pid,
                 session_id=session_id,
-                targets=targets
+                targets=targets,
+                ip_address=ip_address
             )
             print(f"[Ghost {pid}] ✅ Runner completed: {result}")
             return result
@@ -2355,7 +2356,8 @@ class GhostCore:
                 driver=driver,
                 pid=pid,
                 target=target,
-                session_id=self.active_sessions.get(pid, {}).get("session_id", "")
+                session_id=self.active_sessions.get(pid, {}).get("session_id", ""),
+                ip_address=current_ip
             )
 
             print(f"[Ghost {pid}] 🧭 Platform runner result: {runner_result}")
