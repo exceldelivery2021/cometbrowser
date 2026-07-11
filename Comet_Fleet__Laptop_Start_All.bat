@@ -21,7 +21,7 @@ start "Comet Fleet - Sync Client" /min powershell -WindowStyle Hidden -NoProfile
 
 timeout /t 2 /nobreak >nul
 
-start "Comet Fleet - Dashboard Backlog" powershell -NoProfile -ExecutionPolicy Bypass -Command "cd '%~dp0'; python .\start_dashboard.py 2>&1 | Tee-Object -FilePath .\dashboard_log.txt -Append"
+start "Comet Fleet - Dashboard Backlog" powershell -NoProfile -ExecutionPolicy Bypass -Command "cd '%~dp0'; python .\hermes_boot.py 2>&1 | Tee-Object -FilePath .\dashboard_log.txt -Append"
 
 timeout /t 2 /nobreak >nul
 

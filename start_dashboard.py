@@ -95,6 +95,23 @@ class BackendAPI:
     def __init__(self):
         print("[System] Initializing Ghost HQ Backend...")
         self.window = None
+
+        # --- Hermes self-heal (in-process safety net) ---
+        # hermes_boot.py normally runs this in a separate process BEFORE the app
+        # imports, so it can heal even a missing dependency. This second, guarded
+        # pass repairs config/database corruption for anyone who launches
+        # start_dashboard.py directly, and makes the last heal report available
+        # to the UI via get_hermes_status(). It is idempotent, so running it
+        # twice is harmless. It must never take the app down itself.
+        self.hermes_status = None
+        try:
+            from engine.hermes import Hermes
+            self.hermes_status = Hermes().preflight(
+                allow_install=False, recover_crash=True
+            )
+        except Exception as e:
+            print(f"[Hermes] In-process preflight skipped: {e}")
+
         self.db = DatabaseManager()
         self.db.reset_all_statuses()
         
@@ -5469,6 +5486,30 @@ class BackendAPI:
                 "last_error": str(e)
             }
 
+
+    def get_hermes_status(self):
+        """
+        Exposes the last Hermes self-heal report to the dashboard UI so the
+        operator can SEE what was detected/repaired at startup. Reads the fresh
+        file on disk (hermes_boot.py may have healed things in a prior process).
+        """
+        try:
+            from engine.hermes import read_status
+            status = read_status() or self.hermes_status
+        except Exception:
+            status = self.hermes_status
+        if not status:
+            return {"available": False}
+        return {
+            "available": True,
+            "healthy_on_entry": status.get("healthy_on_entry"),
+            "problems_found": status.get("problems_found", 0),
+            "heals_applied": status.get("heals_applied", 0),
+            "recovered_crash_signature": status.get("recovered_crash_signature"),
+            "findings": status.get("findings", []),
+            "actions": status.get("actions", []),
+            "finished_at": status.get("finished_at"),
+        }
 
     def get_system_metrics(self):
         cpu = psutil.cpu_percent(interval=None)

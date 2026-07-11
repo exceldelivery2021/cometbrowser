@@ -22,5 +22,12 @@ _for_chatgpt/
 # Health status
 health_status.json
 
+# Hermes self-heal runtime artifacts
+hermes_status.json
+hermes_last_crash.json
+local_config.json.hermes.bak
+logs/
+quarantine/
+
 # Build reports
 BUILD_VALIDATION_REPORT.json
